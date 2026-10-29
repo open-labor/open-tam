@@ -35,16 +35,21 @@ def query_logs(
     end: str,
     level: str | None = None,
     keyword: str | None = None,
+    region: str = "",
 ) -> str:
     """查询 SLS 日志。签名与 mock 一致。"""
     access_key_id = os.environ.get("ALIYUN_ACCESS_KEY_ID", "")
     access_key_secret = os.environ.get("ALIYUN_ACCESS_KEY_SECRET", "")
     project = os.environ.get("ALIYUN_SLS_PROJECT", "")
     logstore = os.environ.get("ALIYUN_SLS_LOGSTORE", "")
-    region = os.environ.get("ALIYUN_REGION", "cn-hangzhou")
+    region = region or os.environ.get("ALIYUN_REGION", "cn-hangzhou")
 
     if not all([access_key_id, access_key_secret, project, logstore]):
-        return json.dumps([], ensure_ascii=False)
+        raise RuntimeError(
+            "Aliyun SLS 未配置：请安装 open-tam[aliyun] 并设置 "
+            "ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET / "
+            "ALIYUN_SLS_PROJECT / ALIYUN_SLS_LOGSTORE"
+        )
 
     try:
         from aliyun.log import GetLogsRequest, LogClient
@@ -59,7 +64,8 @@ def query_logs(
         if level:
             query_parts.append(f"level: {level.upper()}")
         if keyword:
-            query_parts.append(keyword)
+            escaped = keyword.replace('"', '\\"')
+            query_parts.append(f'"{escaped}"')
         query = " AND ".join(query_parts)
 
         request = GetLogsRequest(
@@ -81,8 +87,10 @@ def query_logs(
             for log in response.get_logs()
         ]
         return json.dumps(records, ensure_ascii=False)
-    except ImportError:
-        return json.dumps([], ensure_ascii=False)
+    except ImportError as exc:
+        raise RuntimeError(
+            "Aliyun SLS SDK 未安装：请执行 uv sync --extra aliyun"
+        ) from exc
     except Exception as exc:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
 

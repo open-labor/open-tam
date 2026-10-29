@@ -6,13 +6,26 @@ from pathlib import Path
 
 import typer
 
+from open_tam.config import Settings
 from open_tam.faults import FAULT_MODES, FaultState
 from open_tam.orchestrator.tools import (
+    Backend,
     InlineBackend,
     McpStdioBackend,
 )
 
 app = typer.Typer(help="open-tam SRE Agent", no_args_is_help=True)
+
+
+def _make_backend(settings: Settings, transport: str) -> Backend:
+    if transport == "inline":
+        return InlineBackend()
+    return McpStdioBackend(
+        metrics_backend=settings.metrics_backend,
+        logs_backend=settings.logs_backend,
+        env_overrides=settings.aliyun_env(),
+        timeout=settings.model_timeout,
+    )
 metrics_app = typer.Typer(help="指标查询")
 logs_app = typer.Typer(help="日志查询")
 fault_app = typer.Typer(help="故障注入")
@@ -31,7 +44,7 @@ def metrics_query(
 ) -> None:
     datetime.fromisoformat(start)
     datetime.fromisoformat(end)
-    backend = InlineBackend() if transport == "inline" else McpStdioBackend()
+    backend = _make_backend(Settings.load(), transport)
     typer.echo(f"# {metric} @ {service} ({transport})")
     typer.echo(backend.execute("query_metrics", {
         "metric": metric, "service": service, "start": start, "end": end,
@@ -49,7 +62,7 @@ def logs_query(
 ) -> None:
     datetime.fromisoformat(start)
     datetime.fromisoformat(end)
-    backend = InlineBackend() if transport == "inline" else McpStdioBackend()
+    backend = _make_backend(Settings.load(), transport)
     typer.echo(f"# logs @ {service} ({transport})")
     typer.echo(backend.execute("query_logs", {
         "service": service, "start": start, "end": end, "level": level, "keyword": keyword,
@@ -96,10 +109,12 @@ def investigate(
     trace = TraceRecorder(alert_id=alert.alert_id, traces_dir=settings.traces_dir)
     metric_trace = TraceRecorder(alert_id=alert.alert_id, traces_dir=settings.traces_dir, agent="metric")
     log_trace = TraceRecorder(alert_id=alert.alert_id, traces_dir=settings.traces_dir, agent="log")
+    k8s_trace = TraceRecorder(alert_id=alert.alert_id, traces_dir=settings.traces_dir, agent="k8s")
     try:
         result, path = run_investigation(
             alert, settings, fake=fake, transport=transport,
             trace=trace, metric_trace=metric_trace, log_trace=log_trace,
+            k8s_trace=k8s_trace,
         )
     except RuntimeError as exc:
         typer.echo(f"错误：{exc}", err=True)
@@ -107,6 +122,17 @@ def investigate(
     typer.echo(f"report saved: {path}")
     typer.echo(f"trace saved: {trace.path}")
     typer.echo(result.root_cause or "未定位根因")
+    try:
+        from open_tam.notifications import notify_investigation_complete
+
+        notify_investigation_complete(
+            settings, investigation_id=alert.alert_id,
+            alert_name=alert.alert_name, service=alert.service,
+            root_cause=result.root_cause, confidence=result.confidence,
+            report_path=str(path),
+        )
+    except Exception as exc:
+        typer.echo(f"通知发送失败（不影响排查）: {exc}", err=True)
 
 
 action_app = typer.Typer(help="运维动作（白名单 + dry-run + 确认 + 审计）")
@@ -174,7 +200,7 @@ def patrol_run(transport: str = typer.Option("inline", help="inline 或 mcp")) -
     from open_tam.patrol import run_patrol
 
     settings = Settings.load()
-    backend = InlineBackend() if transport == "inline" else McpStdioBackend()
+    backend = _make_backend(settings, transport)
     path = run_patrol(settings.reports_dir, backend=backend)
     typer.echo(f"patrol report: {path}")
 
@@ -183,16 +209,17 @@ def patrol_run(transport: str = typer.Option("inline", help="inline 或 mcp")) -
 def patrol_watch(
     every_min: int = typer.Option(5, help="巡检间隔（分钟）"),
     max_runs: int = typer.Option(0, help="最大巡检次数，0 表示不限（Ctrl-C 退出）"),
+    transport: str = typer.Option("inline", help="inline 或 mcp"),
 ) -> None:
     import time
 
-    from open_tam.config import Settings
     from open_tam.patrol import run_patrol
 
     settings = Settings.load()
+    backend = _make_backend(settings, transport)
     runs = 0
     while max_runs <= 0 or runs < max_runs:
-        path = run_patrol(settings.reports_dir)
+        path = run_patrol(settings.reports_dir, backend=backend)
         typer.echo(f"patrol report: {path}")
         runs += 1
         if max_runs > 0 and runs >= max_runs:
@@ -281,7 +308,7 @@ def eval_compare_cmd(
     models: str = typer.Option(..., help="逗号分隔的模型名，如 qwen-plus,qwen-max"),
     faults: str = typer.Option(None, help="逗号分隔的故障名，默认全部"),
     runs: int = typer.Option(1, min=1, help="每种故障运行次数"),
-    fake: bool = typer.Option(True, help="使用脚本模型（默认 true）"),
+    fake: bool = typer.Option(False, help="使用脚本模型对比链路（不代表模型质量）"),
 ) -> None:
     """A/B 模型对比评测。"""
     from open_tam.config import Settings
@@ -400,7 +427,8 @@ app.add_typer(user_app, name="user")
 @user_app.command("create")
 def user_create(
     username: str = typer.Argument(...),
-    role: str = typer.Option("viewer", help="角色: admin/operator/viewer"),
+    role: str = typer.Option("viewer", help="角色: admin/mentor/operator/viewer"),
+    team: str = typer.Option(None, help="团队 ID（可选）"),
 ) -> None:
     """创建用户并输出 API Key。"""
     import uuid
@@ -409,12 +437,20 @@ def user_create(
     from open_tam.auth.apikey import generate_api_key, hash_api_key
     from open_tam.config import Settings
     from open_tam.persistence.database import get_database
-    from open_tam.persistence.repositories import UserRecord, UserRepository
+    from open_tam.persistence.repositories import (
+        TeamRepository,
+        UserRecord,
+        UserRepository,
+    )
 
     settings = Settings.load()
     db_path = settings.database_url.replace("sqlite:///", "")
     db = get_database(db_path)
     user_repo = UserRepository(db)
+
+    if team and TeamRepository(db).get_by_id(team) is None:
+        typer.echo(f"团队不存在: {team}", err=True)
+        raise typer.Exit(1)
 
     if user_repo.get_by_username(username):
         typer.echo(f"用户已存在: {username}", err=True)
@@ -428,6 +464,7 @@ def user_create(
         role=role,
         created_at=datetime.now().isoformat(),
         updated_at=datetime.now().isoformat(),
+        team_id=team,
     )
     user_repo.create(user)
     typer.echo(f"用户创建成功: {username} (role={role})")
@@ -451,7 +488,51 @@ def user_list() -> None:
         typer.echo("（无用户）")
         return
     for u in users:
-        typer.echo(f"  {u.id[:8]}...  {u.username:<20s}  role={u.role}")
+        team = f"  team={u.team_id}" if u.team_id else ""
+        typer.echo(f"  {u.id[:8]}...  {u.username:<20s}  role={u.role}{team}")
+
+
+team_app = typer.Typer(help="团队管理")
+app.add_typer(team_app, name="team")
+
+
+@team_app.command("create")
+def team_create(name: str = typer.Argument(...)) -> None:
+    """创建团队。"""
+    import uuid
+    from datetime import datetime
+
+    from open_tam.config import Settings
+    from open_tam.persistence.database import get_database
+    from open_tam.persistence.repositories import TeamRecord, TeamRepository
+
+    settings = Settings.load()
+    db = get_database(settings.database_url.replace("sqlite:///", ""))
+    repo = TeamRepository(db)
+    if repo.get_by_name(name):
+        typer.echo(f"团队已存在: {name}", err=True)
+        raise typer.Exit(1)
+    team = TeamRecord(id=uuid.uuid4().hex[:12], name=name,
+                      created_at=datetime.now().isoformat())
+    repo.create(team)
+    typer.echo(f"团队创建成功: {team.name} ({team.id})")
+
+
+@team_app.command("list")
+def team_list() -> None:
+    """列出团队。"""
+    from open_tam.config import Settings
+    from open_tam.persistence.database import get_database
+    from open_tam.persistence.repositories import TeamRepository
+
+    settings = Settings.load()
+    db = get_database(settings.database_url.replace("sqlite:///", ""))
+    teams = TeamRepository(db).list_all()
+    if not teams:
+        typer.echo("（无团队）")
+        return
+    for team in teams:
+        typer.echo(f"  {team.id}  {team.name}  {team.created_at[:16]}")
 
 
 @user_app.command("delete")
@@ -511,6 +592,106 @@ def history_list(limit: int = typer.Option(20, help="显示最近 N 条")) -> No
         status = inv.status
         cause = (inv.root_cause or "未定位")[:40]
         typer.echo(f"  {inv.id[:8]}...  {inv.created_at[:16]}  {status:<10s}  {cause}")
+
+
+playbook_app = typer.Typer(help="修复 Playbook 编排")
+app.add_typer(playbook_app, name="playbook")
+
+
+@playbook_app.command("run")
+def playbook_run(
+    path: str = typer.Argument(..., help="Playbook YAML 文件路径"),
+    param: list[str] = typer.Option(None, "--param", help="上下文参数 k=v，可多次"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只预览不执行"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过敏感步骤人工确认"),
+) -> None:
+    """按 YAML 定义逐条执行修复动作，全部经过 Guardrails。"""
+    from open_tam.actions import ACTION_REGISTRY
+    from open_tam.guardrails import (
+        AuditLogger,
+        AutoApprove,
+        Guardrails,
+        InteractiveConfirmer,
+    )
+    from open_tam.playbook.executor import PlaybookExecutor
+    from open_tam.playbook.registry import PlaybookRegistry
+
+    settings = Settings.load()
+    context: dict[str, str] = {}
+    for pair in param or []:
+        if "=" not in pair:
+            typer.echo(f"无效参数（需 k=v）: {pair}", err=True)
+            raise typer.Exit(1)
+        key, value = pair.split("=", 1)
+        context[key] = value
+
+    try:
+        playbook = PlaybookRegistry().load_file(path)
+    except Exception as exc:
+        typer.echo(f"Playbook 加载失败: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    confirmer = AutoApprove() if yes else InteractiveConfirmer()
+    guard = Guardrails(ACTION_REGISTRY, AuditLogger(settings.state_dir),
+                       confirmer=confirmer)
+    executor = PlaybookExecutor(
+        guard, confirmer=lambda action, args: confirmer.confirm(action, args))
+    result = executor.execute(playbook, context, dry_run=dry_run)
+    for step in result.steps:
+        typer.echo(f"[{step.status}] {step.step.action}: "
+                   f"{step.result or step.error or ''}")
+    if not result.success:
+        raise typer.Exit(1)
+
+
+storm_app = typer.Typer(help="告警风暴关联与优先级分析")
+app.add_typer(storm_app, name="storm")
+
+
+@storm_app.command("analyze")
+def storm_analyze(
+    alerts_file: str = typer.Option(..., help="告警 JSON：数组或 {alerts: [...]}"),
+    window_seconds: int = typer.Option(60, help="关联时间窗口（秒）"),
+) -> None:
+    """把一组告警聚合为故障组，并按 P0–P3 输出排查顺序。"""
+    from open_tam.receiver.alert_receiver import normalize_alert
+    from open_tam.storm import AlertCorrelator, PriorityQueue, infer_priority
+
+    try:
+        raw = json.loads(Path(alerts_file).read_text(encoding="utf-8"))
+    except Exception as exc:
+        typer.echo(f"告警文件读取失败: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if isinstance(raw, dict):
+        raw = raw.get("alerts", [raw])
+    if not isinstance(raw, list):
+        typer.echo("告警文件必须是数组或 {alerts: [...]}", err=True)
+        raise typer.Exit(1)
+
+    try:
+        alerts = [normalize_alert(item) for item in raw]
+    except Exception as exc:
+        typer.echo(f"告警解析失败: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    correlator = AlertCorrelator(window_seconds=window_seconds)
+    queue = PriorityQueue()
+    groups: dict[str, list[str]] = {}
+    for alert in alerts:
+        group_id = correlator.correlate(alert)
+        if group_id is None:
+            group_id = correlator.create_group(alert)
+        groups.setdefault(group_id, []).append(alert.alert_id)
+        queue.push(alert, infer_priority(alert), group_id=group_id)
+
+    typer.echo(f"告警 {len(alerts)} 条，聚合为 {len(groups)} 组")
+    for group_id, alert_ids in groups.items():
+        typer.echo(f"  {group_id}: {len(alert_ids)} 条 -> {', '.join(alert_ids)}")
+    typer.echo("排查优先级：")
+    while queue:
+        task = queue.pop()
+        typer.echo(f"  P{int(task.priority)} {task.alert.alert_name}"
+                   f" ({task.alert.service}) group={task.group_id}")
 
 
 @history_app.command("show")

@@ -6,6 +6,8 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from open_tam.paths import safe_alert_id
+
 
 class TraceRecorder:
     """排查过程逐条追加 JSONL：每行 {ts, alert_id, kind, ...fields}，可回放。
@@ -24,13 +26,16 @@ class TraceRecorder:
         base = (
             Path(traces_dir)
             if traces_dir
-            else Path(os.environ.get("OPEN_TAM_TRACES_DIR", "traces"))
+            else Path(os.environ.get(
+                "OPEN_TAM_TRACES_DIR",
+                Path(os.environ.get("OPEN_TAM_BASE_DIR", ".")) / "traces",
+            ))
         )
         base.mkdir(parents=True, exist_ok=True)
         self.alert_id = alert_id
         self.agent = agent
         self.sink = sink
-        self.path = base / f"{alert_id}.jsonl"
+        self.path = base / f"{safe_alert_id(alert_id)}.jsonl"
 
     def record(self, kind: str, **fields: object) -> None:
         entry: dict = {

@@ -1,5 +1,10 @@
 from open_tam.storm.correlator import AlertCorrelator, AlertGroup
-from open_tam.storm.priority_queue import AlertTask, Priority, PriorityQueue
+from open_tam.storm.priority_queue import (
+    AlertTask,
+    Priority,
+    PriorityQueue,
+    infer_priority,
+)
 
 __all__ = [
     "AlertCorrelator",
@@ -7,4 +12,5 @@ __all__ = [
     "AlertTask",
     "Priority",
     "PriorityQueue",
+    "infer_priority",
 ]

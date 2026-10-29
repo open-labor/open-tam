@@ -105,7 +105,7 @@ def test_multi_region_non_aware_tool_passthrough():
     backend = MultiRegionBackend(["cn-hangzhou", "cn-shanghai"],
                                  lambda r: InlineBackend())
     out = backend.execute("query_k8s_events", {"namespace": "default"})
-    assert json.loads(out) == {"error": "unknown tool: query_k8s_events"}
+    assert json.loads(out) == []
 
 
 def test_regions_from_env(monkeypatch):
@@ -130,9 +130,11 @@ def test_fake_run_with_regions_config(tmp_path, monkeypatch, state):
         "metric": "cpu_usage", "threshold": 80, "current_value": 92.5,
     })
     sink_events: list[dict] = []
-    make_trace = lambda agent: TraceRecorder(
-        alert_id=alert.alert_id, traces_dir=settings.traces_dir,
-        agent=agent, sink=sink_events.append)
+
+    def make_trace(agent):
+        return TraceRecorder(
+            alert_id=alert.alert_id, traces_dir=settings.traces_dir,
+            agent=agent, sink=sink_events.append)
     result, path = run_investigation(
         alert, settings, fake=True, transport="inline",
         trace=make_trace(None), metric_trace=make_trace("metric"),

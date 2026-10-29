@@ -25,30 +25,58 @@ def run_patrol(
             "metric": mode.metric, "service": mode.service,
             "start": start.isoformat(), "end": now.isoformat(),
         })
-        points = json.loads(raw)
-        peak = max((p["value"] for p in points), default=0.0)
-        status = "anomaly" if peak > mode.baseline_high else "normal"
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            checks.append({
+                "fault": mode.name, "service": mode.service, "metric": mode.metric,
+                "peak": 0.0, "threshold": mode.baseline_high, "status": "error",
+                "error": str(data.get("error", "unexpected response")),
+            })
+            continue
+        values = [p["value"] for p in data]
+        if not values:
+            checks.append({
+                "fault": mode.name, "service": mode.service, "metric": mode.metric,
+                "peak": 0.0, "threshold": mode.baseline_high, "status": "error",
+                "error": "empty series",
+            })
+            continue
+        peak = max(values)
+        trough = min(values)
+        observed = trough if mode.anomaly_direction == "low" else peak
+        if mode.anomaly_direction == "low":
+            anomalous = observed < mode.baseline_high
+        else:
+            anomalous = observed > mode.baseline_high
         checks.append({
             "fault": mode.name, "service": mode.service, "metric": mode.metric,
-            "peak": round(peak, 1), "threshold": mode.baseline_high, "status": status,
+            "peak": round(observed, 1), "threshold": mode.baseline_high,
+            "status": "anomaly" if anomalous else "normal",
         })
 
     anomalies = [c for c in checks if c["status"] == "anomaly"]
+    errors = [c for c in checks if c["status"] == "error"]
     lines = [
         "# 巡检报告",
         "",
         f"- 巡检时间：{now.isoformat(timespec='seconds')}",
         f"- 检查窗口：最近 {window_minutes} 分钟",
-        f"- 检查项：{len(checks)}，异常：{len(anomalies)}",
+        f"- 检查项：{len(checks)}，异常：{len(anomalies)}，错误：{len(errors)}",
         "",
-        "| 故障模式 | 服务 | 指标 | 窗口峰值 | 阈值 | 状态 |",
+        "| 故障模式 | 服务 | 指标 | 窗口观测值 | 阈值 | 状态 |",
         "|---|---|---|---|---|---|",
     ]
     for c in checks:
-        status_cn = "异常" if c["status"] == "anomaly" else "正常"
+        status_cn = {"anomaly": "异常", "error": "错误"}.get(c["status"], "正常")
+        if c["status"] == "error":
+            status_cn = f"错误：{c['error']}"
         lines.append(
             f"| {c['fault']} | {c['service']} | {c['metric']} | {c['peak']} | {c['threshold']} | {status_cn} |"
         )
+    if errors:
+        lines += ["", "## 巡检错误", ""]
+        for c in errors:
+            lines.append(f"- **{c['fault']}**：{c['error']}")
     if anomalies:
         lines += ["", "## 异常跟进", ""]
         for c in anomalies:

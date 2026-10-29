@@ -6,6 +6,7 @@ from pathlib import Path
 
 from open_tam.models import AlertEvent
 from open_tam.orchestrator.loop import DiagnosisResult
+from open_tam.paths import safe_alert_id
 
 
 def render_report(
@@ -55,6 +56,6 @@ def save_report(
 ) -> Path:
     d = Path(reports_dir)
     d.mkdir(parents=True, exist_ok=True)
-    path = d / f"{datetime.now():%Y-%m-%d}-{alert.alert_id}.md"
+    path = d / f"{datetime.now():%Y-%m-%d}-{safe_alert_id(alert.alert_id)}.md"
     path.write_text(render_report(alert, result), encoding="utf-8")
     return path

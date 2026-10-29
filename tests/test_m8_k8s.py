@@ -115,6 +115,26 @@ class TestK8sServer:
         assert result[0]["type"] == "CrashLoopBackOff"
 
 
+class TestK8sBackendExecution:
+    def test_inline_backend_executes_k8s_tools(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPEN_TAM_STATE_DIR", str(tmp_path))
+        FaultState(tmp_path).activate("pod_crash_loop", duration_minutes=30)
+        from open_tam.orchestrator.tools import InlineBackend
+
+        result = json.loads(InlineBackend().execute(
+            "query_pod_status", {"namespace": "default", "pod_name": "demo-app-xxx"}))
+        assert result["phase"] == "CrashLoopBackOff"
+
+    def test_mcp_stdio_k8s_protocol_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPEN_TAM_STATE_DIR", str(tmp_path))
+        FaultState(tmp_path).activate("node_not_ready", duration_minutes=30)
+        from open_tam.orchestrator.tools import McpStdioBackend
+
+        result = json.loads(McpStdioBackend().execute(
+            "query_node_status", {"node_name": "worker-1"}))
+        assert result["ready"] is False
+
+
 class TestK8sBackendRouting:
     def test_mcp_backend_routes_k8s_tools(self):
         from open_tam.orchestrator.tools import McpStdioBackend

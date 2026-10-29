@@ -22,6 +22,10 @@ class FaultMode:
     remediation: str
     log_signature: str = ""
     eval_keywords: tuple[str, ...] = ()  # 评测命中判定：根因文本应包含的关键词
+    anomaly_direction: str = "high"  # high: 越高越异常；low: 越低越异常
+    baseline_amplitude: float = 8.0  # 正常波动的正弦幅度
+    baseline_noise: float = 3.0
+    spike_noise: float = 2.0
 
 
 FAULT_MODES: dict[str, FaultMode] = {
@@ -84,6 +88,9 @@ FAULT_MODES: dict[str, FaultMode] = {
         baseline_mid=0.0,
         baseline_high=1.0,
         spike_value=5.0,
+        baseline_amplitude=0.0,
+        baseline_noise=0.0,
+        spike_noise=0.0,
         anomaly_desc="Pod 在 5 分钟内重启超过 3 次（CrashLoopBackOff）",
         root_cause="应用启动失败或运行时 panic，容器反复崩溃重启",
         remediation="检查容器日志与 liveness probe 配置，修复启动错误后重新部署",
@@ -97,6 +104,10 @@ FAULT_MODES: dict[str, FaultMode] = {
         baseline_mid=1.0,
         baseline_high=0.5,
         spike_value=0.0,
+        anomaly_direction="low",
+        baseline_amplitude=0.0,
+        baseline_noise=0.0,
+        spike_noise=0.0,
         anomaly_desc="Node 状态变为 NotReady 超过 5 分钟",
         root_cause="kubelet 异常或节点资源耗尽导致 Node NotReady",
         remediation="检查 kubelet 日志与节点资源使用，必要时重启 kubelet 或驱逐 Pod",
@@ -110,6 +121,9 @@ FAULT_MODES: dict[str, FaultMode] = {
         baseline_mid=0.0,
         baseline_high=1.0,
         spike_value=50.0,
+        baseline_amplitude=0.0,
+        baseline_noise=0.0,
+        spike_noise=0.0,
         anomaly_desc="DNS 解析失败率飙升，Pod 无法访问外部服务",
         root_cause="CoreDNS Pod 异常或 ConfigMap 配置错误导致集群 DNS 故障",
         remediation="检查 CoreDNS Pod 状态与日志，验证 DNS ConfigMap 配置",
@@ -123,6 +137,10 @@ FAULT_MODES: dict[str, FaultMode] = {
         baseline_mid=30.0,
         baseline_high=14.0,
         spike_value=0.0,
+        anomaly_direction="low",
+        baseline_amplitude=0.0,
+        baseline_noise=0.0,
+        spike_noise=0.0,
         anomaly_desc="TLS 证书即将过期或已过期",
         root_cause="TLS 证书未配置自动续期，证书过期导致 HTTPS 连接失败",
         remediation="使用 cert-manager 配置自动续期，临时手动更新证书",
@@ -137,7 +155,9 @@ class FaultState:
 
     def __init__(self, state_dir: Path | str | None = None) -> None:
         # 构造时读取环境变量（而非 import 时固化），保证测试可在运行期隔离
-        self.path = Path(state_dir) if state_dir else Path(os.environ.get("OPEN_TAM_STATE_DIR", "var"))
+        default_dir = Path(os.environ.get(
+            "OPEN_TAM_STATE_DIR", Path(os.environ.get("OPEN_TAM_BASE_DIR", ".")) / "var"))
+        self.path = Path(state_dir) if state_dir else default_dir
         self.path.mkdir(parents=True, exist_ok=True)
         self.file = self.path / "fault_state.json"
 

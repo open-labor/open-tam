@@ -1,0 +1,76 @@
+- id: alert-triage
+  order: 1
+  name: 告警受理与分级
+  category: 可观测性
+  level: 入门
+  description: 把告警标准化为 AlertEvent，判断严重度、影响面与排查优先级。
+  when_to_use: 收到云监控 / AlertManager / 自定义告警时
+  case_ids:
+  - cpu_spike
+- id: metric-window
+  order: 2
+  name: 指标窗口分析
+  category: 可观测性
+  level: 入门
+  description: 用 query_metrics 对齐基线、窗口和峰值，确认异常是否真实存在。
+  when_to_use: 需要判断指标异常幅度或开始时间时
+  case_ids:
+  - cpu_spike
+  - slow_query
+- id: log-evidence
+  order: 3
+  name: 日志证据检索
+  category: 可观测性
+  level: 入门
+  description: 按级别、关键字和时间窗口检索日志，提炼可引用的证据签名。
+  when_to_use: 需要现场证据或确认错误模式时
+  case_ids:
+  - slow_query
+  - oom
+- id: rca-report
+  order: 4
+  name: 根因报告
+  category: 方法论
+  level: 进阶
+  description: 用结论摘要、异常清单、建议动作和排除项组织一份可复盘的报告。
+  when_to_use: 排查收敛、需要交付给客户或团队时
+  case_ids:
+  - cpu_spike
+  - connection_pool_exhausted
+- id: guardrails
+  order: 5
+  name: 安全动作
+  category: 安全
+  level: 进阶
+  description: 在白名单、dry-run、人工确认和审计约束下执行修复动作。
+  when_to_use: Agent 或工程师准备改变系统状态时
+  case_ids:
+  - cpu_spike
+- id: k8s-triage
+  order: 6
+  name: K8s 基础排障
+  category: 基础设施
+  level: 进阶
+  description: 从 Pod 状态、事件、Node 状态和 K8sGPT 分析定位基础设施问题。
+  when_to_use: 告警涉及 Pod / Node / DNS / 证书时
+  case_ids:
+  - pod_crash_loop
+  - node_not_ready
+  - dns_failure
+  - cert_expiry
+- id: storm-triage
+  order: 7
+  name: 告警风暴关联
+  category: 方法论
+  level: 进阶
+  description: 按时间窗口、服务重叠和依赖关系聚合告警，并用 P0–P3 排队。
+  when_to_use: 同一时间收到多条关联告警时
+  case_ids: []
+- id: skill-retro
+  order: 8
+  name: 复盘与 Skill 沉淀
+  category: 知识
+  level: 进阶
+  description: 把 trace 提取成 Skill，注入后续排查，并用评测持续验证。
+  when_to_use: 一次排查结束、准备沉淀经验时
+  case_ids: []

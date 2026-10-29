@@ -23,6 +23,9 @@ def test_eval_fake_reports_hits(tmp_path, monkeypatch):
     assert report.hit_rate == 1.0
     assert all(r.steps >= 2 for r in report.runs)
     assert all(r.confidence == "high" for r in report.runs)
+    assert all(r.evidence_sufficiency > 0 for r in report.runs)
+    # fake 回放必须匹配故障故事，而不是永远讲 CPU
+    assert "缓存" in (report.runs[1].root_cause or "")
     # 每轮结束后故障状态被清理，不污染下一次评测
     from open_tam.faults import FaultState
     assert not FaultState().is_active("cpu_spike")
@@ -49,6 +52,16 @@ def test_eval_cli_fake(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "命中率" in result.output
     assert list((tmp_path / "reports").glob("eval-*.md"))
+
+
+def test_eval_transport_follows_backend_settings(monkeypatch):
+    from open_tam.config import Settings
+    from open_tam.eval import _transport
+
+    monkeypatch.setenv("OPEN_TAM_LOGS_BACKEND", "aliyun")
+    settings = Settings.load()
+    assert _transport(settings, fake=False) == "mcp"
+    assert _transport(settings, fake=True) == "inline"
 
 
 def test_eval_cli_unknown_fault(tmp_path, monkeypatch):

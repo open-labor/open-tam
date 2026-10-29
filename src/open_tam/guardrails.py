@@ -25,7 +25,9 @@ class AuditLogger:
 
     def __init__(self, state_dir: Path | str | None = None) -> None:
         # 构造时读取环境变量，保证测试可在运行期隔离（与 FaultState 一致）
-        base = Path(state_dir) if state_dir else Path(os.environ.get("OPEN_TAM_STATE_DIR", "var"))
+        default_dir = Path(os.environ.get(
+            "OPEN_TAM_STATE_DIR", Path(os.environ.get("OPEN_TAM_BASE_DIR", ".")) / "var"))
+        base = Path(state_dir) if state_dir else default_dir
         base.mkdir(parents=True, exist_ok=True)
         self.path = base / "audit.log"
 

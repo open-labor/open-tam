@@ -39,14 +39,17 @@ def run_compare(
     *,
     settings: Settings,
     runs: int = 1,
-    fake: bool = True,
+    fake: bool = False,
 ) -> CompareReport:
     results = []
     for label in model_labels:
         model_settings = Settings(
             **{**settings.__dict__, "model_primary": label}
         )
-        report = run_eval(fault_names, settings=model_settings, runs=runs, fake=fake)
+        report = run_eval(
+            fault_names, settings=model_settings, runs=runs, fake=fake,
+            model_label=label,
+        )
         results.append(CompareResult(model_label=label, report=report))
     return CompareReport(results=results, fault_names=fault_names)
 

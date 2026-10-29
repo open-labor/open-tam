@@ -1,0 +1,313 @@
+- id: cpu_spike
+  order: 1
+  title: CPU 使用率飙升
+  kind: fault
+  fault_name: cpu_spike
+  category: 计算
+  level: 入门
+  tags:
+  - CPU
+  - 发布变更
+  objective: 从指标窗口确认异常，再用日志锁定低效正则。
+  steps:
+  - 查 cpu_usage 最近 60 分钟
+  - 对比基线 ~30% 与峰值 ~92%
+  - 检索 WARN 日志确认正则回溯
+  - 建议回滚发布并优化正则
+  evidence:
+  - 异常窗口内 CPU 持续高于阈值
+  - 日志出现 CPU usage above 85% for 60s
+  skill_ids:
+  - alert-triage
+  - metric-window
+  - log-evidence
+  - rca-report
+  - guardrails
+- id: slow_query
+  order: 2
+  title: 数据库慢查询
+  kind: fault
+  fault_name: slow_query
+  category: 数据库
+  level: 入门
+  tags:
+  - SQL
+  - 索引
+  objective: 用指标定位慢查询窗口，用日志找到 SQL 签名。
+  steps:
+  - 查 db_query_duration_ms 的异常窗口
+  - 确认峰值相对基线升高
+  - 检索慢查询日志与 SQL 原文
+  - 建议补索引并回滚临时 SQL
+  evidence:
+  - 慢查询耗时从基线 ~120ms 升至 ~3200ms
+  - 日志包含 SELECT * FROM orders 全表扫描
+  skill_ids:
+  - metric-window
+  - log-evidence
+- id: oom
+  order: 3
+  title: 内存 OOMKilled
+  kind: fault
+  fault_name: oom
+  category: 内存
+  level: 进阶
+  tags:
+  - 缓存
+  - OOMKilled
+  objective: 区分内存爬升、容器终止与缓存未淘汰。
+  steps:
+  - 查 memory_usage 是否持续爬升
+  - 对齐容器终止时间点
+  - 检索 OutOfMemoryError / OOMKilled 日志
+  - 建议加 TTL / 上限并临时扩容
+  evidence:
+  - 内存从 ~55% 爬升至 ~95% 后触发终止
+  - 日志出现 Java heap space / OOMKilled
+  skill_ids:
+  - log-evidence
+  - rca-report
+- id: connection_pool_exhausted
+  order: 4
+  title: 连接池耗尽
+  kind: fault
+  fault_name: connection_pool_exhausted
+  category: 数据库
+  level: 进阶
+  tags:
+  - 连接池
+  - 事务
+  objective: 把连接池打满与应用超时、慢事务关联起来。
+  steps:
+  - 查 db_active_connections 是否达到池上限
+  - 定位超时开始时间
+  - 检索连接池等待日志
+  - 建议缩短事务边界并设置 statement timeout
+  evidence:
+  - 活跃连接打到池上限 50
+  - 日志出现 Connection is not available, request timed out
+  skill_ids:
+  - rca-report
+- id: pod_crash_loop
+  order: 5
+  title: Pod CrashLoopBackOff
+  kind: fault
+  fault_name: pod_crash_loop
+  category: Kubernetes
+  level: 进阶
+  tags:
+  - Pod
+  - 重启
+  objective: 从 Pod 状态、事件和容器日志定位反复崩溃原因。
+  steps:
+  - 查 query_pod_status 的 phase / restart_count
+  - 查 query_k8s_events 的 BackOff 事件
+  - 检索容器启动失败日志
+  - 修复启动错误或 liveness probe 后重新部署
+  evidence:
+  - Pod phase = CrashLoopBackOff，restart_count 持续增加
+  - 事件出现 Back-off restarting failed container
+  skill_ids:
+  - k8s-triage
+- id: node_not_ready
+  order: 6
+  title: 节点 NotReady
+  kind: fault
+  fault_name: node_not_ready
+  category: Kubernetes
+  level: 进阶
+  tags:
+  - Node
+  - kubelet
+  objective: 判断节点状态、kubelet 与资源压力之间的关系。
+  steps:
+  - 查 query_node_status 的 Ready 条件
+  - 查 NodeNotReady 事件
+  - 检查 kubelet 与节点资源
+  - 必要时重启 kubelet 或驱逐 Pod
+  evidence:
+  - Node condition Ready = False
+  - 事件出现 kubelet stopped posting node status
+  skill_ids:
+  - k8s-triage
+- id: dns_failure
+  order: 7
+  title: DNS 解析失败
+  kind: fault
+  fault_name: dns_failure
+  category: 网络
+  level: 进阶
+  tags:
+  - DNS
+  - CoreDNS
+  objective: 从解析失败率和 CoreDNS 状态定位集群 DNS 故障。
+  steps:
+  - 查 dns_lookup_failures 指标
+  - 检索 DNS lookup failed 日志
+  - 检查 CoreDNS Pod 与 ConfigMap
+  - 修复配置或重启 CoreDNS
+  evidence:
+  - DNS 解析失败率显著高于基线
+  - 日志出现 DNS lookup failed for external service
+  skill_ids:
+  - k8s-triage
+- id: cert_expiry
+  order: 8
+  title: TLS 证书过期
+  kind: fault
+  fault_name: cert_expiry
+  category: 网络
+  level: 进阶
+  tags:
+  - TLS
+  - 证书
+  objective: 用剩余天数和 TLS 错误日志判断证书风险。
+  steps:
+  - 查 cert_days_remaining 是否低于阈值
+  - 检索 TLS certificate expired 日志
+  - 确认证书链与域名
+  - 启用 cert-manager 自动续期并临时更新
+  evidence:
+  - 证书剩余天数跌到 0
+  - 日志出现 TLS certificate expired
+  skill_ids:
+  - k8s-triage
+- id: release_5xx
+  order: 9
+  title: 发布后 5xx 激增
+  kind: reading
+  synthetic: true
+  category: 发布变更
+  level: 进阶
+  tags:
+  - 变更
+  - 错误率
+  service: checkout
+  metric: http_5xx_rate
+  alert_name: 5xx 错误率升高
+  threshold: 1.0
+  current_value: 8.4
+  summary: 发布后 5xx 错误率从 0.2% 升至 8.4%，持续 12 分钟。
+  log_signature: NullPointerException at CheckoutController.java:142
+  root_cause: 新版本引入空指针异常，在特定请求路径触发。
+  remediation: 回滚到上一个稳定版本，补充异常路径单测后再发布。
+  objective: 练习把发布变更与错误率拐点关联起来。
+  steps:
+  - 对齐发布时间与错误率拐点
+  - 按版本/实例切分错误率
+  - 检索异常堆栈确认触发路径
+  - 建议回滚并补测试
+  evidence:
+  - 错误率拐点与发布完成时间相差 2 分钟
+  - 异常集中在单一版本实例
+  keywords:
+  - 空指针
+  - 发布
+  - 回滚
+  skill_ids:
+  - alert-triage
+  - rca-report
+- id: db_replication_lag
+  order: 10
+  title: 数据库主从延迟
+  kind: reading
+  synthetic: true
+  category: 数据库
+  level: 进阶
+  tags:
+  - 复制
+  - 延迟
+  service: orders-db
+  metric: replication_lag_ms
+  alert_name: 主从延迟升高
+  threshold: 500
+  current_value: 4200
+  summary: 只读副本复制延迟从 20ms 升至 4.2s，读请求开始超时。
+  log_signature: Replica lag 4200ms exceeds threshold 500ms
+  root_cause: 大事务写入导致 binlog 应用延迟，读副本无法及时追上主库。
+  remediation: 拆分大事务，增加副本规格，并在延迟恢复前将读流量切回主库。
+  objective: 理解复制延迟与读流量、超时之间的关系。
+  steps:
+  - 查 replication_lag_ms 与写流量
+  - 定位大事务/批量写入
+  - 确认读副本超时与业务影响
+  - 拆分事务并临时切读流量
+  evidence:
+  - 延迟峰值与批量导入任务时间重合
+  - 读副本出现 read timeout
+  keywords:
+  - 大事务
+  - 复制
+  - 延迟
+  skill_ids:
+  - metric-window
+  - rca-report
+- id: node_disk_pressure
+  order: 11
+  title: 节点磁盘压力
+  kind: reading
+  synthetic: true
+  category: Kubernetes
+  level: 进阶
+  tags:
+  - Node
+  - 磁盘
+  service: k8s-node
+  metric: node_disk_usage
+  alert_name: 节点磁盘使用率过高
+  threshold: 85
+  current_value: 96
+  summary: 节点根分区使用率升至 96%，kubelet 开始驱逐 Pod。
+  log_signature: 'eviction manager: attempting to reclaim disk space'
+  root_cause: 容器日志未轮转，叠加镜像缓存堆积占满根分区。
+  remediation: 清理旧镜像与日志，配置日志轮转和磁盘告警，必要时扩容节点。
+  objective: 把节点磁盘压力与 Pod 驱逐、日志轮转联系起来。
+  steps:
+  - 查 node_disk_usage 与 inode 使用率
+  - 定位大目录/日志/镜像
+  - 确认驱逐事件与受影响 Pod
+  - 清理并配置轮转/扩容
+  evidence:
+  - 根分区使用率 96%
+  - 出现 DiskPressure 与 Pod eviction 事件
+  keywords:
+  - 磁盘
+  - 驱逐
+  - 日志轮转
+  skill_ids:
+  - k8s-triage
+- id: slb_health_check
+  order: 12
+  title: SLB 健康检查异常
+  kind: reading
+  synthetic: true
+  category: 网络
+  level: 进阶
+  tags:
+  - SLB
+  - 健康检查
+  service: gateway
+  metric: slb_unhealthy_backends
+  alert_name: SLB 后端异常
+  threshold: 1
+  current_value: 3
+  summary: SLB 健康检查失败后端从 0 增至 3，部分请求 502。
+  log_signature: 'Health check failed: connection refused on port 8080'
+  root_cause: 后端实例安全组未放行健康检查端口，SLB 判定实例不健康。
+  remediation: 放行健康检查端口，校验安全组变更流程，并观察后端恢复。
+  objective: 练习从入口层异常反推后端网络与安全组配置。
+  steps:
+  - 查 SLB 不健康后端数量
+  - 确认健康检查端口与路径
+  - 检查安全组/网络 ACL 变更
+  - 放行端口并验证恢复
+  evidence:
+  - 不健康后端集中在同一可用区
+  - 健康检查日志 connection refused
+  keywords:
+  - 安全组
+  - 健康检查
+  - 端口
+  skill_ids:
+  - k8s-triage
+  - rca-report

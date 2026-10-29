@@ -65,12 +65,13 @@ class PlaybookExecutor:
         """Execute a single step."""
         params = self._render_params(step.params, context)
 
-        if step.sensitivity == Sensitivity.SENSITIVE and not step.auto_execute:
+        if step.sensitivity == Sensitivity.SENSITIVE and not dry_run:
             if self.confirmer:
                 if not self.confirmer(step.action, params):
                     return StepResult(step=step, status=StepStatus.DENIED, error="User denied")
             else:
-                return StepResult(step=step, status=StepStatus.DENIED, error="No confirter configured")
+                return StepResult(step=step, status=StepStatus.DENIED,
+                                  error="No confirmer configured")
 
         try:
             output = self.guardrails.run(
@@ -99,7 +100,7 @@ class PlaybookExecutor:
                 rollback_action = f"rollback_{step_result.step.action}"
                 self.guardrails.run(
                     rollback_action, step_result.step.params,
-                    actor="playbook", dry_run=False, confirmed=True
+                    actor="playbook", dry_run=False, confirmed=False
                 )
             except Exception:
                 pass

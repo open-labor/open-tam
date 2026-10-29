@@ -1,13 +1,22 @@
-"""Mock K8s MCP server for K8sGPT-style diagnostics."""
+"""Mock K8s MCP server (K8sGPT-style diagnostics).
+
+The server implements the standard MCP protocol via FastMCP, so it can be
+reached through ``McpStdioBackend`` as well as the in-process handlers.
+"""
 from __future__ import annotations
 
 import json
 import sys
 
+from mcp.server.fastmcp import FastMCP
+
 from open_tam.faults import FaultState
 
+mcp = FastMCP("mock-k8s")
 
-def _query_k8s_events(namespace: str, pod_name: str | None = None, kind: str | None = None) -> str:
+
+def _query_k8s_events(namespace: str, pod_name: str | None = None,
+                      kind: str | None = None) -> str:
     events = []
     state = FaultState()
     if state.is_active("pod_crash_loop"):
@@ -157,52 +166,34 @@ TOOLS = [
 ]
 
 
-def _handle_tool_call(name: str, arguments: dict) -> str:
-    if name == "query_k8s_events":
-        return _query_k8s_events(
-            arguments["namespace"],
-            arguments.get("pod_name"),
-            arguments.get("kind"),
-        )
-    if name == "query_pod_status":
-        return _query_pod_status(arguments["namespace"], arguments["pod_name"])
-    if name == "query_node_status":
-        return _query_node_status(arguments["node_name"])
-    if name == "analyze_with_k8sgpt":
-        return _analyze_with_k8sgpt(
-            arguments["namespace"],
-            arguments.get("pod_name"),
-        )
-    return json.dumps({"error": f"unknown tool: {name}"})
+@mcp.tool()
+def query_k8s_events(namespace: str, pod_name: str | None = None,
+                     kind: str | None = None) -> str:
+    """查询 K8s 事件。"""
+    return _query_k8s_events(namespace, pod_name, kind)
 
 
-def main() -> None:
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if request.get("method") == "tools/list":
-            result = {"tools": TOOLS}
-        elif request.get("method") == "tools/call":
-            params = request.get("params", {})
-            name = params.get("name", "")
-            arguments = params.get("arguments", {})
-            output = _handle_tool_call(name, arguments)
-            result = {"content": [{"type": "text", "text": output}]}
-        else:
-            result = {"error": "method not supported"}
-        response = {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+@mcp.tool()
+def query_pod_status(namespace: str, pod_name: str) -> str:
+    """查询 Pod 状态。"""
+    return _query_pod_status(namespace, pod_name)
 
 
-if __name__ == "__main__":
-    main()
+@mcp.tool()
+def query_node_status(node_name: str) -> str:
+    """查询 Node 状态。"""
+    return _query_node_status(node_name)
+
+
+@mcp.tool()
+def analyze_with_k8sgpt(namespace: str, pod_name: str | None = None) -> str:
+    """使用 K8sGPT 自动分析 K8s 问题。"""
+    return _analyze_with_k8sgpt(namespace, pod_name)
 
 
 def _server_command() -> tuple[str, list[str]]:
     return (sys.executable, ["-m", "open_tam.mcp_servers.k8s_server"])
+
+
+if __name__ == "__main__":
+    mcp.run()

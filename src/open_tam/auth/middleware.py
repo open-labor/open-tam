@@ -11,7 +11,9 @@ from open_tam.auth.apikey import verify_api_key
 from open_tam.persistence.database import Database
 from open_tam.persistence.repositories import UserRepository
 
-PUBLIC_PATHS = {"/health", "/api/health", "/alerts", "/"}
+PUBLIC_PATHS = {
+    "/health", "/api/health", "/api/config", "/api/catalog", "/alerts", "/",
+}
 PUBLIC_PREFIXES = ("/static/", "/docs", "/openapi.json")
 
 

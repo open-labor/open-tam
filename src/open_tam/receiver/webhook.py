@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 
+from open_tam.paths import safe_alert_id
 from open_tam.receiver.adapters import adapt_alert
 from open_tam.receiver.dedup import AlertDedup
 
@@ -67,7 +68,7 @@ def create_webhook_app(
         if not dedup.should_process(event.alert_name, event.service):
             return {"alert_id": event.alert_id, "dedup": True, "message": "duplicate suppressed"}
 
-        (inbox / f"{event.alert_id}.json").write_text(
+        (inbox / f"{safe_alert_id(event.alert_id)}.json").write_text(
             event.model_dump_json(indent=2), encoding="utf-8"
         )
         return {"alert_id": event.alert_id, "dedup": False, "alert": event.model_dump(mode="json")}

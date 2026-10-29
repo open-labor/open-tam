@@ -24,3 +24,6 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+      - name: Eval quality gate
+        run: uv run open-tam eval --fake --min-hit-rate 0.8

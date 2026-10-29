@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 
 
@@ -14,4 +15,4 @@ def hash_api_key(api_key: str) -> str:
 
 
 def verify_api_key(api_key: str, stored_hash: str) -> bool:
-    return hash_api_key(api_key) == stored_hash
+    return hmac.compare_digest(hash_api_key(api_key), stored_hash)

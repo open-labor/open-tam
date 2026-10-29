@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -11,6 +12,8 @@ from open_tam.models import AlertEvent
 from open_tam.orchestrator.investigate import run_investigation
 from open_tam.tracing.trace import TraceRecorder
 from open_tam.web.events import Investigation, InvestigationHub
+
+logger = logging.getLogger(__name__)
 
 
 class WebConfirmer:
@@ -74,7 +77,7 @@ def start_investigation(
     loop：FastAPI 所在的事件循环（sink 广播经 call_soon_threadsafe 桥接进去）。
     db：可选 SQLite 连接；先落库再启动线程，避免状态回写打在 INSERT 之前。
     """
-    inv = hub.create(alert, fake=fake, transport=transport)
+    inv = hub.create(alert, fake=fake, transport=transport, user_id=user_id)
     inv.status = "running"
     _persist_start(db, inv, alert, user_id)
     threading.Thread(
@@ -109,7 +112,7 @@ def _persist_start(db, inv: Investigation, alert: AlertEvent, user_id: str | Non
             created_at=now, updated_at=now,
         ))
     except Exception:
-        pass
+        logger.exception("failed to persist investigation start: %s", inv.id)
 
 
 def _match_skill(alert: AlertEvent, settings: Settings) -> dict | None:
@@ -121,7 +124,7 @@ def _match_skill(alert: AlertEvent, settings: Settings) -> dict | None:
         if skill:
             return {"name": skill.name, "confidence": skill.confidence}
     except Exception:
-        pass
+        logger.debug("skill matching failed", exc_info=True)
     return None
 
 
@@ -136,11 +139,13 @@ def _run(hub: InvestigationHub, inv: Investigation, loop: asyncio.AbstractEventL
                                  agent="metric", sink=sink)
     log_trace = TraceRecorder(alert_id=alert_id, traces_dir=settings.traces_dir,
                               agent="log", sink=sink)
+    k8s_trace = TraceRecorder(alert_id=alert_id, traces_dir=settings.traces_dir,
+                              agent="k8s", sink=sink)
     try:
         result, path = run_investigation(
             inv.alert, settings, fake=inv.fake, transport=inv.transport,
             trace=trace, metric_trace=metric_trace, log_trace=log_trace,
-            confirmer=inv.confirmer,
+            k8s_trace=k8s_trace, confirmer=inv.confirmer,
         )
     except Exception as exc:
         _mark_db(db, inv.id, status="error")
@@ -152,6 +157,17 @@ def _run(hub: InvestigationHub, inv: Investigation, loop: asyncio.AbstractEventL
     hub.finish(inv.id, report_path=str(path), root_cause=result.root_cause,
                confidence=result.confidence, evidence=result.evidence,
                actions=result.actions, skill_used=_match_skill(inv.alert, settings))
+    try:
+        from open_tam.notifications import notify_investigation_complete
+
+        notify_investigation_complete(
+            settings, investigation_id=inv.id,
+            alert_name=inv.alert.alert_name, service=inv.alert.service,
+            root_cause=result.root_cause, confidence=result.confidence,
+            report_path=str(path),
+        )
+    except Exception:
+        logger.exception("failed to send completion notification: %s", inv.id)
 
 
 def _mark_db(db, inv_id: str, *, status: str, root_cause: str | None = None,
@@ -167,4 +183,4 @@ def _mark_db(db, inv_id: str, *, status: str, root_cause: str | None = None,
             report_path=report_path, trace_path=trace_path,
         )
     except Exception:
-        pass
+        logger.exception("failed to persist investigation status: %s", inv_id)

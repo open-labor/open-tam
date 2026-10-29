@@ -67,11 +67,11 @@ class EvidenceJudge:
                 args = e.get("arguments", {})
                 lines.append(f"[tool_call] {tool}({json.dumps(args, ensure_ascii=False)[:100]})")
             elif kind == "observation":
-                data = str(e.get("data", ""))[:150]
+                data = str(e.get("observation", e.get("data", "")))[:150]
                 lines.append(f"[observation] {data}")
             elif kind == "final":
-                rc = e.get("root_cause", "")
-                lines.append(f"[final] root_cause={rc}")
+                rc = e.get("content", e.get("root_cause", ""))
+                lines.append(f"[final] {str(rc)[:200]}")
         return "\n".join(lines)
 
     def _parse_score(self, text: str | None) -> float:

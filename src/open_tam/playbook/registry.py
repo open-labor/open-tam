@@ -27,6 +27,11 @@ class PlaybookRegistry:
     def find_matching(self, alert_name: str, confidence: float) -> list[Playbook]:
         return [p for p in self._playbooks.values() if p.matches(alert_name, confidence)]
 
+    def load_file(self, path: Path | str) -> Playbook:
+        playbook = self._load_yaml(Path(path))
+        self.register(playbook)
+        return playbook
+
     def load_from_dir(self, directory: Path | str | None = None) -> int:
         """Load playbooks from YAML files. Returns count loaded."""
         dir_path = Path(directory) if directory else self._dir
@@ -36,8 +41,7 @@ class PlaybookRegistry:
         count = 0
         for path in dir_path.glob("*.yaml"):
             try:
-                playbook = self._load_yaml(path)
-                self.register(playbook)
+                self.load_file(path)
                 count += 1
             except Exception:
                 continue

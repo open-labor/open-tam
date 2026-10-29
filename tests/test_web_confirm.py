@@ -122,7 +122,8 @@ async def test_confirm_endpoint_end_to_end(db, tmp_path, monkeypatch):
         await asyncio.sleep(0.05)
     assert server.started, "uvicorn failed to start"
 
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as c:
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                 trust_env=False) as c:
         r = await c.post("/api/investigations", json={"alert": ALERT, "fake": True})
         assert r.status_code == 202
         inv_id = r.json()["id"]

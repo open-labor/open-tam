@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from open_tam.models import AlertEvent
@@ -22,7 +23,9 @@ class Investigation:
     alert: AlertEvent
     fake: bool
     transport: str
+    user_id: str | None = None
     status: str = "pending"  # pending | running | done | error
+    created_at: datetime = field(default_factory=datetime.now)
     events: list[dict] = field(default_factory=list)
     subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -40,14 +43,30 @@ class InvestigationHub:
         self._investigations: dict[str, Investigation] = {}
         self._lock = threading.Lock()
 
-    def create(self, alert: AlertEvent, *, fake: bool, transport: str) -> Investigation:
-        inv = Investigation(id=uuid4().hex[:12], alert=alert, fake=fake, transport=transport)
+    def create(self, alert: AlertEvent, *, fake: bool, transport: str,
+               user_id: str | None = None) -> Investigation:
+        inv = Investigation(id=uuid4().hex[:12], alert=alert, fake=fake,
+                            transport=transport, user_id=user_id)
         with self._lock:
             self._investigations[inv.id] = inv
+        self.cleanup()
         return inv
 
     def get(self, investigation_id: str) -> Investigation | None:
-        return self._investigations.get(investigation_id)
+        with self._lock:
+            return self._investigations.get(investigation_id)
+
+    def cleanup(self, max_age_seconds: int = 3600) -> int:
+        """Drop finished investigations and their subscribers after a TTL."""
+        cutoff = datetime.now() - timedelta(seconds=max_age_seconds)
+        with self._lock:
+            stale = [
+                inv for inv in self._investigations.values()
+                if inv.status in ("done", "error") and inv.created_at < cutoff
+            ]
+            for inv in stale:
+                self._investigations.pop(inv.id, None)
+            return len(stale)
 
     def sink_for(self, investigation_id: str):
         inv = self._investigations[investigation_id]
@@ -69,6 +88,15 @@ class InvestigationHub:
             snapshot = list(inv.events)
             inv.subscribers.append((queue, loop))
         return Subscription(snapshot=snapshot, queue=queue)
+
+    def unsubscribe(self, investigation_id: str, queue: asyncio.Queue) -> None:
+        inv = self._investigations.get(investigation_id)
+        if inv is None:
+            return
+        with inv.lock:
+            inv.subscribers = [
+                (q, loop) for q, loop in inv.subscribers if q is not queue
+            ]
 
     def finish(self, investigation_id: str, *, report_path: str, root_cause: str | None,
                confidence: str, evidence: list[str], actions: list[str],

@@ -33,7 +33,8 @@ def test_start_investigation_fake_runs_to_done(tmp_path, monkeypatch):
     loop = asyncio.new_event_loop()
 
     inv = start_investigation(hub, _alert(), fake=True, transport="inline", loop=loop)
-    assert inv.status == "running"
+    # The fake run can finish before this thread observes the intermediate state.
+    assert inv.status in ("running", "done")
     _wait_status(hub, inv.id, "done", "error")
 
     assert inv.status == "done"

@@ -210,6 +210,29 @@ class TestPlaybookExecutor:
         result = executor.execute(playbook, context={})
         assert result.steps[0].status == StepStatus.DENIED
 
+    def test_sensitive_step_never_bypasses_confirmation(self, tmp_path, monkeypatch):
+        from open_tam.actions import ACTION_REGISTRY
+        from open_tam.guardrails import AuditLogger, AutoApprove, Guardrails
+
+        monkeypatch.setenv("OPEN_TAM_STATE_DIR", str(tmp_path))
+        guardrails = Guardrails(ACTION_REGISTRY, AuditLogger(tmp_path),
+                                confirmer=AutoApprove())
+        executor = PlaybookExecutor(guardrails, confirmer=None)
+
+        playbook = Playbook(
+            id="test", name="Test",
+            steps=[
+                PlaybookStep(
+                    order=1, action="restart_service",
+                    params={"service": "demo-app"},
+                    sensitivity=Sensitivity.SENSITIVE,
+                    auto_execute=True,
+                ),
+            ],
+        )
+        result = executor.execute(playbook, context={})
+        assert result.steps[0].status == StepStatus.DENIED
+
 
 class TestPlaybookRegistry:
     def test_register_and_get(self):

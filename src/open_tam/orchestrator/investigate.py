@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timedelta
 
 from open_tam.actions import ACTION_REGISTRY
 from open_tam.config import Settings
+from open_tam.faults import FAULT_MODES, FaultMode
 from open_tam.guardrails import AuditLogger, AutoDeny, Confirmer, Guardrails
 from open_tam.models import AlertEvent
 from open_tam.orchestrator.agents import (
@@ -40,6 +42,17 @@ from open_tam.skills.loader import SkillLoader
 from open_tam.tracing.trace import TraceRecorder
 
 
+def _guess_fault(alert: AlertEvent) -> FaultMode:
+    """Pick the demo story that matches the alert, falling back to CPU spike."""
+    for mode in FAULT_MODES.values():
+        if mode.metric == alert.metric and mode.service == alert.service:
+            return mode
+    for mode in FAULT_MODES.values():
+        if mode.metric == alert.metric:
+            return mode
+    return FAULT_MODES["cpu_spike"]
+
+
 def _build_system_prompt(alert: AlertEvent, settings: Settings, base_prompt: str) -> str:
     """加载匹配的 Skill 并注入 system prompt。"""
     try:
@@ -63,14 +76,27 @@ def run_investigation(
     log_trace: TraceRecorder,
     k8s_trace: TraceRecorder | None = None,
     confirmer: Confirmer | None = None,
+    fake_fault: str | None = None,
 ) -> tuple[DiagnosisResult, object]:
     """orchestrator 三子 Agent 排查闭环：运行 ReActLoop 并落盘报告。
 
     返回 (DiagnosisResult, 报告路径)。trace recorder 由调用方创建
     （CLI 不传 sink；Web 传 sink 做流式广播）。confirmer 决定敏感操作
     的人工确认方式：默认 None → AutoDeny；Web 传 WebConfirmer 走 SSE 弹窗。
+    fake_fault 指定 fake 模式回放的故障故事；缺省按 alert 的指标/服务推断。
     """
-    make_leaf = (lambda region: InlineBackend()) if transport == "inline" else (lambda region: McpStdioBackend())
+    aliyun_env = settings.aliyun_env()
+
+    def make_leaf(region: str):
+        if transport == "inline":
+            return InlineBackend()
+        return McpStdioBackend(
+            metrics_backend=settings.metrics_backend,
+            logs_backend=settings.logs_backend,
+            env_overrides={**aliyun_env, "ALIYUN_REGION": region},
+            timeout=settings.model_timeout,
+        )
+
     # 多区域配置：region-aware 工具并行 fan-out 各区域；单区域走直连
     leaf_backend = (MultiRegionBackend(list(settings.regions), make_leaf)
                     if len(settings.regions) > 1 else make_leaf(settings.aliyun_region))
@@ -81,6 +107,23 @@ def run_investigation(
     k8s_tools = [QUERY_K8S_EVENTS_SPEC, QUERY_POD_STATUS_SPEC, QUERY_NODE_STATUS_SPEC, ANALYZE_WITH_K8SGPT_SPEC]
 
     if fake:
+        mode = FAULT_MODES.get(fake_fault) if fake_fault else _guess_fault(alert)
+        if mode is None:
+            raise ValueError(f"未知故障模式: {fake_fault}")
+        final = json.dumps({
+            "root_cause": mode.root_cause,
+            "evidence": [mode.anomaly_desc] + (
+                [f"日志特征: {mode.log_signature}"] if mode.log_signature else []
+            ),
+            "actions": [mode.remediation],
+            "confidence": "high",
+            "excluded": [],
+        }, ensure_ascii=False)
+        k8s_summary = (
+            f"检测到 {mode.name}：{mode.anomaly_desc}"
+            if mode.name in {"pod_crash_loop", "node_not_ready", "dns_failure", "cert_expiry"}
+            else "K8s 集群状态正常，无异常事件"
+        )
         orch_model = FakeChatModel([
             ModelReply(content="先问指标子 Agent 确认异常", tool_calls=[ToolCall(
                 id="t1", name="ask_metric_agent",
@@ -88,16 +131,14 @@ def run_investigation(
             ModelReply(content="再向日志子 Agent 要现场证据", tool_calls=[ToolCall(
                 id="t2", name="ask_log_agent",
                 arguments={"question": f"检索 {alert.service} 最近一小时 ERROR/WARN 日志，找与 {alert.metric} 异常相关的证据"})]),
-            ModelReply(content=(
-                '```json\n{"root_cause": "demo-app /search 接口低效正则导致 CPU 飙升", '
-                '"evidence": ["指标子 Agent：cpu_usage 持续高于 85", "日志子 Agent 返回的现场证据"], '
-                '"actions": ["回滚最近发布", "优化正则逻辑"], "confidence": "high"}\n```'),
-                tool_calls=[]),
+            ModelReply(content=f"```json\n{final}\n```", tool_calls=[]),
         ])
         metric_agent = SpecialistAgent(
             name="metric", system_prompt=METRIC_AGENT_PROMPT,
             tools=[QUERY_METRICS_SPEC], backend=leaf_backend,
-            model=FakeChatModel([ModelReply(content="cpu_usage 在最近 30 分钟持续高于 85，确认异常")]),
+            model=FakeChatModel([ModelReply(
+                content=f"{alert.metric} 最近 30 分钟出现异常"
+                        f"（阈值 {alert.threshold}，当前 {alert.current_value}）")]),
         )
         log_agent = SpecialistAgent(
             name="log", system_prompt=LOG_AGENT_PROMPT,
@@ -112,7 +153,7 @@ def run_investigation(
         k8s_agent = SpecialistAgent(
             name="k8s", system_prompt=K8S_AGENT_PROMPT,
             tools=k8s_tools, backend=leaf_backend,
-            model=FakeChatModel([ModelReply(content="K8s 集群状态正常，无异常事件")]),
+            model=FakeChatModel([ModelReply(content=k8s_summary)]),
         )
     else:
         if not os.environ.get("DASHSCOPE_API_KEY"):
@@ -120,7 +161,8 @@ def run_investigation(
         from open_tam.orchestrator.llm import AgentScopeChatModel
 
         llm = AgentScopeChatModel(
-            primary=settings.model_primary, fallback=settings.model_fallback
+            primary=settings.model_primary, fallback=settings.model_fallback,
+            timeout=settings.model_timeout,
         )
         orch_model = llm
         metric_agent = SpecialistAgent(

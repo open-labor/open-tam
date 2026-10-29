@@ -25,6 +25,17 @@ def test_patrol_flags_injected_fault(tmp_path, monkeypatch):
     assert "open-tam investigate" in text
 
 
+def test_patrol_flags_low_direction_faults(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPEN_TAM_STATE_DIR", str(tmp_path / "var"))
+    FaultState().activate("node_not_ready", duration_minutes=30)
+    FaultState().activate("cert_expiry", duration_minutes=30)
+    now = datetime.now().replace(second=0, microsecond=0)
+    path = run_patrol(tmp_path / "reports", now=now)
+    text = path.read_text(encoding="utf-8")
+    assert "node_not_ready" in text and "cert_expiry" in text
+    assert text.count("异常") >= 2
+
+
 def test_patrol_report_filename_format(tmp_path, monkeypatch):
     monkeypatch.setenv("OPEN_TAM_STATE_DIR", str(tmp_path / "var"))
     path = run_patrol(tmp_path / "reports", now=datetime(2026, 8, 31, 12, 0, 0))

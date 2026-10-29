@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta
 
 from open_tam.models import AlertEvent
 from open_tam.web.events import InvestigationHub
@@ -73,6 +74,24 @@ def test_hub_fail_marks_error():
     e = loop.run_until_complete(asyncio.wait_for(sub.queue.get(), timeout=1))
     assert e["kind"] == "error" and e["error"] == "boom"
     loop.close()
+
+
+def test_hub_unsubscribe_and_cleanup():
+    hub = InvestigationHub()
+    inv = hub.create(_alert(), fake=True, transport="inline")
+    loop = asyncio.new_event_loop()
+    queue = asyncio.Queue()
+    hub.subscribe(inv.id, queue=queue, loop=loop)
+    assert len(inv.subscribers) == 1
+
+    hub.unsubscribe(inv.id, queue)
+    assert inv.subscribers == []
+    loop.close()
+
+    inv.status = "done"
+    inv.created_at = datetime.now() - timedelta(hours=2)
+    assert hub.cleanup(max_age_seconds=3600) == 1
+    assert hub.get(inv.id) is None
 
 
 def test_hub_unknown_id_raises():

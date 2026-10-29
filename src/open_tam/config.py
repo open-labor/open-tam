@@ -9,8 +9,9 @@ from pathlib import Path
 class Settings:
     state_dir: Path
     reports_dir: Path
-    inbox_dir: Path
     traces_dir: Path
+    content_dir: Path
+    book_dir: Path
     model_primary: str
     model_fallback: str
     model_timeout: float
@@ -29,7 +30,6 @@ class Settings:
     skills_dir: Path
     database_url: str
     auth_enabled: bool
-    auth_secret: str
     notify_dingtalk_webhook: str
     notify_feishu_webhook: str
     notify_slack_webhook: str
@@ -40,8 +40,15 @@ class Settings:
         return cls(
             state_dir=Path(os.environ.get("OPEN_TAM_STATE_DIR", base / "var")),
             reports_dir=Path(os.environ.get("OPEN_TAM_REPORTS_DIR", base / "reports")),
-            inbox_dir=Path(os.environ.get("OPEN_TAM_INBOX_DIR", base / "var" / "inbox")),
             traces_dir=Path(os.environ.get("OPEN_TAM_TRACES_DIR", base / "traces")),
+            content_dir=Path(os.environ.get(
+                "OPEN_TAM_CONTENT_DIR",
+                Path(__file__).resolve().parents[2] / "content",
+            )),
+            book_dir=Path(os.environ.get(
+                "OPEN_TAM_BOOK_DIR",
+                Path(__file__).resolve().parents[2] / "content" / "tam-book",
+            )),
             model_primary=os.environ.get("OPEN_TAM_MODEL_PRIMARY", "qwen-plus"),
             model_fallback=os.environ.get("OPEN_TAM_MODEL_FALLBACK", "qwen-turbo"),
             model_timeout=float(os.environ.get("OPEN_TAM_MODEL_TIMEOUT", "120")),
@@ -60,8 +67,18 @@ class Settings:
             skills_dir=Path(os.environ.get("OPEN_TAM_SKILLS_DIR", base / "skills")),
             database_url=os.environ.get("OPEN_TAM_DATABASE_URL", f"sqlite:///{base / 'var' / 'open_tam.db'}"),
             auth_enabled=os.environ.get("OPEN_TAM_AUTH_ENABLED", "false").lower() == "true",
-            auth_secret=os.environ.get("OPEN_TAM_AUTH_SECRET", ""),
             notify_dingtalk_webhook=os.environ.get("OPEN_TAM_NOTIFY_DINGTALK_WEBHOOK", ""),
             notify_feishu_webhook=os.environ.get("OPEN_TAM_NOTIFY_FEISHU_WEBHOOK", ""),
             notify_slack_webhook=os.environ.get("OPEN_TAM_NOTIFY_SLACK_WEBHOOK", ""),
         )
+
+    def aliyun_env(self) -> dict[str, str]:
+        """Environment variables expected by the Aliyun MCP servers."""
+        values = {
+            "ALIYUN_ACCESS_KEY_ID": self.aliyun_access_key_id,
+            "ALIYUN_ACCESS_KEY_SECRET": self.aliyun_access_key_secret,
+            "ALIYUN_REGION": self.aliyun_region,
+            "ALIYUN_SLS_PROJECT": self.aliyun_sls_project,
+            "ALIYUN_SLS_LOGSTORE": self.aliyun_sls_logstore,
+        }
+        return {k: v for k, v in values.items() if v}

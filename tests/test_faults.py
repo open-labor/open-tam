@@ -42,3 +42,16 @@ def test_fault_modes_have_full_story(name):
     mode = FAULT_MODES[name]
     assert mode.root_cause and mode.remediation and mode.anomaly_desc and mode.log_signature
     assert mode.baseline_mid < mode.baseline_high < mode.spike_value
+
+
+@pytest.mark.parametrize("name", ["node_not_ready", "cert_expiry"])
+def test_low_direction_fault_modes(name):
+    mode = FAULT_MODES[name]
+    assert mode.anomaly_direction == "low"
+    assert mode.spike_value < mode.baseline_high < mode.baseline_mid
+
+
+def test_base_dir_only_controls_default_state_dir(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPEN_TAM_STATE_DIR", raising=False)
+    monkeypatch.setenv("OPEN_TAM_BASE_DIR", str(tmp_path))
+    assert FaultState().path == tmp_path / "var"

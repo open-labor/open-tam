@@ -6,12 +6,20 @@ from enum import StrEnum
 
 class Role(StrEnum):
     ADMIN = "admin"
+    MENTOR = "mentor"
     OPERATOR = "operator"
     VIEWER = "viewer"
 
 
 PERMISSIONS = {
-    Role.ADMIN: {"read", "write", "investigate", "manage_users", "manage_skills"},
+    Role.ADMIN: {
+        "read", "write", "investigate", "manage_users", "manage_skills",
+        "manage_teams", "view_team", "review_attempts",
+    },
+    Role.MENTOR: {
+        "read", "write", "investigate", "manage_skills", "view_team",
+        "review_attempts",
+    },
     Role.OPERATOR: {"read", "write", "investigate"},
     Role.VIEWER: {"read"},
 }

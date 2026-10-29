@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,10 +7,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from open_tam.config import Settings
+from open_tam.eval_judge import EvidenceJudge, fake_judge_model
 from open_tam.faults import FAULT_MODES, FaultMode, FaultState
-from open_tam.investigation import run_investigation
 from open_tam.models import AlertEvent
-from open_tam.orchestrator.loop import FakeChatModel, ModelReply, ToolCall
+from open_tam.orchestrator.investigate import run_investigation
+from open_tam.tracing.trace import TraceRecorder, load_trace
 
 
 @dataclass(frozen=True)
@@ -68,25 +68,6 @@ def alert_for(mode: FaultMode) -> AlertEvent:
     })
 
 
-def fake_orchestrator_model(mode: FaultMode) -> FakeChatModel:
-    """故障感知的脚本化编排模型：按故障注册表的预期答案回放，仅验证评测链路。"""
-    final = json.dumps({
-        "root_cause": mode.root_cause,
-        "evidence": [mode.anomaly_desc, f"日志特征: {mode.log_signature}"],
-        "actions": [mode.remediation],
-        "confidence": "high",
-    }, ensure_ascii=False)
-    return FakeChatModel([
-        ModelReply(content="先问指标子 Agent 确认异常", tool_calls=[ToolCall(
-            id="t1", name="ask_metric_agent",
-            arguments={"question": f"{mode.service} 的 {mode.metric} 最近一小时是否异常？异常窗口与幅度？"})]),
-        ModelReply(content="再向日志子 Agent 要现场证据", tool_calls=[ToolCall(
-            id="t2", name="ask_log_agent",
-            arguments={"question": f"检索 {mode.service} 最近一小时 ERROR/WARN 日志，找与 {mode.metric} 异常相关的证据"})]),
-        ModelReply(content=f"```json\n{final}\n```", tool_calls=[]),
-    ])
-
-
 def keyword_hit(mode: FaultMode, root_cause: str | None) -> bool:
     if not root_cause:
         return False
@@ -94,32 +75,88 @@ def keyword_hit(mode: FaultMode, root_cause: str | None) -> bool:
     return any(kw.lower() in text for kw in mode.eval_keywords)
 
 
+def _transport(settings: Settings, fake: bool) -> str:
+    if fake:
+        return "inline"
+    if settings.metrics_backend != "mock" or settings.logs_backend != "mock":
+        return "mcp"
+    return "inline"
+
+
+def _judge_model(settings: Settings, fake: bool):
+    if fake:
+        return fake_judge_model(0.85)
+    from open_tam.orchestrator.llm import AgentScopeChatModel
+
+    return AgentScopeChatModel(
+        primary=settings.model_primary,
+        fallback=settings.model_fallback,
+        timeout=settings.model_timeout,
+    )
+
+
 def run_eval(
-    fault_names: list[str], *, settings: Settings, runs: int = 1, fake: bool
+    fault_names: list[str], *, settings: Settings, runs: int = 1, fake: bool,
+    model_label: str | None = None,
 ) -> EvalReport:
-    model_label = "fake（脚本回放，仅验证评测链路）" if fake else settings.model_primary
+    if model_label:
+        label = f"{model_label}（fake 回放）" if fake else model_label
+    elif fake:
+        label = "fake（脚本回放，仅验证评测链路）"
+    else:
+        label = settings.model_primary
+
+    judge = None if fake else EvidenceJudge(_judge_model(settings, fake=False))
     results: list[EvalRun] = []
     for name in fault_names:
         mode = FAULT_MODES[name]
         for _ in range(runs):
             alert = alert_for(mode)
-            model = fake_orchestrator_model(mode) if fake else None
             state = FaultState()
             state.activate(name, duration_minutes=30)
+            trace = TraceRecorder(alert_id=alert.alert_id, traces_dir=settings.traces_dir)
+            metric_trace = TraceRecorder(
+                alert_id=alert.alert_id, traces_dir=settings.traces_dir, agent="metric")
+            log_trace = TraceRecorder(
+                alert_id=alert.alert_id, traces_dir=settings.traces_dir, agent="log")
+            k8s_trace = TraceRecorder(
+                alert_id=alert.alert_id, traces_dir=settings.traces_dir, agent="k8s")
             start = time.monotonic()
             try:
-                outcome = run_investigation(alert, settings=settings, model=model)
+                outcome, report_path = run_investigation(
+                    alert, settings, fake=fake,
+                    transport=_transport(settings, fake),
+                    trace=trace, metric_trace=metric_trace, log_trace=log_trace,
+                    k8s_trace=k8s_trace,
+                    fake_fault=name if fake else None,
+                )
             finally:
                 state.clear(name)
+            elapsed_s = time.monotonic() - start
+
+            score = 0.0
+            try:
+                verdict = EvidenceJudge(
+                    _judge_model(settings, fake=fake) if fake else judge
+                ).judge(
+                    Path(report_path).read_text(encoding="utf-8"),
+                    load_trace(trace.path),
+                    mode.root_cause,
+                )
+                score = verdict.score
+            except Exception:
+                score = 0.0
+
             results.append(EvalRun(
                 fault=name,
                 root_cause=outcome.root_cause,
                 keyword_hit=keyword_hit(mode, outcome.root_cause),
                 confidence=outcome.confidence,
-                steps=outcome.steps,
-                elapsed_s=time.monotonic() - start,
+                steps=len(outcome.steps),
+                elapsed_s=elapsed_s,
+                evidence_sufficiency=score,
             ))
-    return EvalReport(model_label=model_label, runs=results)
+    return EvalReport(model_label=label, runs=results)
 
 
 def write_eval_report(report: EvalReport, reports_dir: Path) -> Path:

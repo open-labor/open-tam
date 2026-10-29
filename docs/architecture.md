@@ -114,6 +114,34 @@ flowchart TB
 
 > 分层说明：ReAct 排查循环自研（`orchestrator/loop.py`）；AgentScope 仅用于模型接入（`orchestrator/llm.py`），负责 DashScope 调用、主备切换与消息/工具格式转换。
 
+## 当前实现边界（2026-10-25）
+
+- 工作台 IA：Web 端重构为 10 个一级模块（今日工作台 / 任务中心 / 客户工作 / 服务执行 / 事件与问题 / 协同与经营 / 我的成长 / 团队管理 / 知识与工具 / 系统设置），旧能力（排查、历史、案例、手册、流程、Skill、评测、团队）全部映射到新导航；新页面由 `workspace.js` 提供，静态资源带版本查询串。
+- 能力发展层：`content/*.yaml` 定义模块/Skill/案例，`GET /api/catalog` 驱动 Web UI；`learning_progress` / `case_attempts` 落库，Mentor/Admin 可看团队进度。
+- TAM 手册层：`content/tam-book` 保存完整书稿，`/api/book` 输出目录、`/api/book/{slug}` 输出服务端渲染的专题正文（HTML 转义、TOC、上下篇）；Web UI 提供书籍索引与章节阅读页。
+- 实战流程层：`load_workflows(book)` 把章节/附录/模板的二级标题转成可执行步骤；`/api/workflows` 输出目录，`/api/workflow-runs` 保存登录用户的步骤、备注与状态（DB v4 `workflow_runs`）；demo 模式使用 localStorage，章节页与流程页互相跳转。
+- 事件闭环：`/api/history` 提供工单/RCA 数据，`GET /api/history/{id}/report` 只读返回 reports 目录内的 Markdown 报告；`GET /api/audit` 读取 `audit_entries`（Admin；demo 开放）。
+- 客户/任务/服务/协同/成长目标等业务对象是浏览器 localStorage 演示工作区；学习、流程、排查、团队、评测是服务端事实源。设置页明确该边界。
+- 默认数据源为 mock；Aliyun CMS/SLS 需安装 `uv sync --extra aliyun` 并配置凭证。
+- K8s MCP 与故障模式为 mock，真实集群 / K8sGPT 二进制未接入。
+- `restart_service` / `rollback_release` 为模拟动作；仅 `clear_fault` 真实改变 mock 故障状态。
+- 告警风暴与 Playbook 通过 `open-tam storm analyze` / `open-tam playbook run` 使用；Webhook 目前不做自动关联聚合。
+- 评测 `--fake` 仅验证链路；真实模型评测需 DashScope Key。
+
+### Web 数据流
+
+```mermaid
+flowchart LR
+    NAV[10 模块导航<br/>workspace.js] --> PAGE[工作台页面]
+    PAGE --> API[服务端 API<br/>history / workflows / attempts / team / evals / audit]
+    PAGE --> LOCAL[(localStorage<br/>客户 / 任务 / 服务 / 协同 / 成长目标)]
+    PAGE --> BOOK[/api/book<br/>71 专题/]
+    PAGE --> WF[/api/workflows<br/>69 流程/]
+    API --> DB[(SQLite WAL<br/>schema v4)]
+    SUB[排查工作台 SSE] --> API
+    SUB -.linkInvestigation.-> LOCAL
+```
+
 ## 替换路径（mock → 实盘）
 
 | MVP 阶段 | 后期替换为 | 接入里程碑 |

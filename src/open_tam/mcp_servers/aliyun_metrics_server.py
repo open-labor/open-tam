@@ -27,8 +27,8 @@ except ImportError:
 _server = FastMCP("aliyun-metrics")
 
 
-def _get_client():
-    """延迟初始化阿里云 CMS 客户端。"""
+def _get_client(region: str | None = None):
+    """延迟初始化阿里云 CMS 客户端；缺少 SDK 或凭证时返回 None。"""
     try:
         from alibabacloud_cms20190101.client import Client
         from alibabacloud_tea_openapi.models import Config
@@ -37,7 +37,7 @@ def _get_client():
 
     access_key_id = os.environ.get("ALIYUN_ACCESS_KEY_ID", "")
     access_key_secret = os.environ.get("ALIYUN_ACCESS_KEY_SECRET", "")
-    region = os.environ.get("ALIYUN_REGION", "cn-hangzhou")
+    region = region or os.environ.get("ALIYUN_REGION", "cn-hangzhou")
 
     if not access_key_id or not access_key_secret:
         return None
@@ -52,11 +52,15 @@ def _get_client():
 
 
 @_server.tool()
-def query_metrics(metric: str, service: str, start: str, end: str) -> str:
+def query_metrics(metric: str, service: str, start: str, end: str,
+                  region: str = "") -> str:
     """查询 CMS 指标时序数据。签名与 mock 一致。"""
-    client = _get_client()
+    client = _get_client(region or None)
     if client is None:
-        return json.dumps([{"ts": start, "value": 0.0}], ensure_ascii=False)
+        raise RuntimeError(
+            "Aliyun CMS 未配置：请安装 open-tam[aliyun] 并设置 "
+            "ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET"
+        )
 
     try:
         from alibabacloud_cms20190101.models import DescribeMetricDataRequest

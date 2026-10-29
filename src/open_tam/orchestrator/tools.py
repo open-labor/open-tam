@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 from open_tam.faults import FaultState
 from open_tam.guardrails import Guardrails
@@ -140,6 +141,20 @@ class InlineBackend:
             return query_metrics_inline(**args)
         if name == "query_logs":
             return query_logs_inline(**args)
+        if name.startswith("query_k8s") or name in ("query_pod_status", "query_node_status",
+                                                    "analyze_with_k8sgpt"):
+            from open_tam.mcp_servers import k8s_server
+
+            if name == "query_k8s_events":
+                return k8s_server._query_k8s_events(
+                    args["namespace"], args.get("pod_name"), args.get("kind"))
+            if name == "query_pod_status":
+                return k8s_server._query_pod_status(args["namespace"], args["pod_name"])
+            if name == "query_node_status":
+                return k8s_server._query_node_status(args["node_name"])
+            if name == "analyze_with_k8sgpt":
+                return k8s_server._analyze_with_k8sgpt(
+                    args["namespace"], args.get("pod_name"))
         return json.dumps({"error": f"unknown tool: {name}"})
 
 
@@ -163,14 +178,18 @@ def query_logs_inline(service: str, start: str, end: str, level: str | None = No
 class McpStdioBackend:
     """通过 MCP stdio 子进程调用 MCP server。按配置路由到 mock 或 aliyun 后端。"""
 
-    def __init__(self, metrics_backend: str = "mock", logs_backend: str = "mock") -> None:
+    def __init__(self, metrics_backend: str = "mock", logs_backend: str = "mock",
+                 *, env_overrides: dict[str, str] | None = None,
+                 timeout: float = 60.0) -> None:
         self.metrics_backend = metrics_backend
         self.logs_backend = logs_backend
+        self.env_overrides = dict(env_overrides or {})
+        self.timeout = timeout
 
     def execute(self, name: str, args: dict) -> str:
         import asyncio
 
-        return asyncio.run(self._call(name, args))
+        return asyncio.run(asyncio.wait_for(self._call(name, args), timeout=self.timeout))
 
     async def _call(self, name: str, args: dict) -> str:
         import subprocess
@@ -179,8 +198,12 @@ class McpStdioBackend:
         from mcp.client.stdio import stdio_client
 
         command, cmd_args = self._resolve_command(name)
+        env = subprocess_env()
+        # 只把阿里云凭证交给阿里云 MCP 子进程，避免扩散到 mock/k8s 进程。
+        if any("aliyun" in arg for arg in cmd_args):
+            env.update(self.env_overrides)
         params = StdioServerParameters(
-            command=command, args=cmd_args, env=subprocess_env()
+            command=command, args=cmd_args, env=env
         )
         async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
             async with ClientSession(read, write) as session:

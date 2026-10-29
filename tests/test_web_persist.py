@@ -167,11 +167,12 @@ async def test_history_show_unknown_404(db):
     assert r.status_code == 404
 
 
-async def test_viewer_can_read_history(db):
+async def test_viewer_history_is_isolated(db):
     from open_tam.faults import FaultState
     FaultState().activate("cpu_spike", duration_minutes=30)
     op_key = _user(db, "u-op3", "operator")
     viewer_key = _user(db, "u-viewer2", "viewer")
+    admin_key = _user(db, "u-admin3", "admin")
     app = create_app(db=db, auth_enabled=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/investigations", json={"alert": ALERT, "fake": True},
@@ -181,4 +182,10 @@ async def test_viewer_can_read_history(db):
 
         r = await c.get("/api/history", headers={"X-API-Key": viewer_key})
         assert r.status_code == 200
-        assert len(r.json()["investigations"]) >= 1
+        assert r.json()["investigations"] == []
+        r = await c.get(f"/api/history/{inv_id}", headers={"X-API-Key": viewer_key})
+        assert r.status_code == 403
+
+        r = await c.get("/api/history", headers={"X-API-Key": admin_key})
+        assert r.status_code == 200
+        assert any(i["id"] == inv_id for i in r.json()["investigations"])

@@ -1,0 +1,84 @@
+- id: alert
+  order: 1
+  title: 告警受理与分级
+  level: 入门
+  time: 15 min
+  goal: 读懂 AlertEvent，判断严重度与排查优先级。
+  points:
+  - 识别 alert_name / service / metric / severity
+  - 理解告警去重与 P0–P3 优先级
+  - 把告警转成可执行的排查问题
+  practice: '#case/cpu_spike'
+  practice_label: 用 CPU 飙升案例练习
+  skill_ids:
+  - alert-triage
+- id: metrics
+  order: 2
+  title: 指标窗口分析
+  level: 入门
+  time: 20 min
+  goal: 用指标确认异常是否存在，并界定窗口与幅度。
+  points:
+  - 查 60 分钟窗口与基线
+  - 区分真实异常与周期波动
+  - 记录峰值、阈值与开始时间
+  practice: '#case/slow_query'
+  practice_label: 用慢查询案例练习
+  skill_ids:
+  - metric-window
+- id: logs
+  order: 3
+  title: 日志证据检索
+  level: 入门
+  time: 20 min
+  goal: 从日志级别、关键字和签名中找到现场证据。
+  points:
+  - 按 level / keyword 过滤
+  - 对齐异常时间窗口
+  - 摘录可复用的日志签名
+  practice: '#case/oom'
+  practice_label: 用 OOM 案例练习
+  skill_ids:
+  - log-evidence
+- id: rca
+  order: 4
+  title: 多 Agent 根因报告
+  level: 进阶
+  time: 25 min
+  goal: 理解 orchestrator 委托与三段式根因报告的写法。
+  points:
+  - 看 orchestrator 如何委托子 Agent
+  - 区分证据、排除项与建议动作
+  - 用报告模板表达置信度
+  practice: '#case/connection_pool_exhausted'
+  practice_label: 用连接池案例练习
+  skill_ids:
+  - rca-report
+- id: guardrails
+  order: 5
+  title: 护栏与安全动作
+  level: 进阶
+  time: 15 min
+  goal: 在自动化前先理解白名单、dry-run、确认与审计。
+  points:
+  - 动作白名单与参数校验
+  - 敏感动作人工确认
+  - 审计日志与回滚边界
+  practice: '#workbench'
+  practice_label: 进入工作台演练
+  skill_ids:
+  - guardrails
+- id: retro
+  order: 6
+  title: 复盘与 Skill 沉淀
+  level: 进阶
+  time: 20 min
+  goal: 把一次排查变成团队可复用的 Skill 和评测样本。
+  points:
+  - 从 trace 提取排查模板
+  - 匹配告警并注入 system prompt
+  - 用评测回归验证改进
+  practice: '#skills'
+  practice_label: 查看知识库
+  skill_ids:
+  - skill-retro

@@ -52,7 +52,7 @@
 - [x] alibabacloud-observability MCP 替换 mock-metrics 后端
 - [x] SLS 日志服务替换 mock-logs 后端
 - [x] 后端切换配置（metrics_backend / logs_backend）
-- **验收**：webhook → 多格式适配 → 去重 → 排查全链路可用 ✅（2026-09-22 核验，commit 967faa6；CMS/AlertManager/native 三格式自动检测与 severity 映射、HMAC-SHA256 签名验证、300s 滑窗去重、webhook 端点集成测试全绿（test_m5_realtime.py 25 例）；`OPEN_TAM_METRICS_BACKEND`/`OPEN_TAM_LOGS_BACKEND=aliyun` 路由 aliyun-metrics（CMS）/aliyun-logs（SLS）MCP 后端，工具签名与 mock 完全一致；真实云端凭证按 README 配置即插即用）
+- **验收**：webhook → 多格式适配 → 去重 → 排查全链路可用 ✅（2026-09-22 核验，commit 967faa6；CMS/AlertManager/native 三格式自动检测与 severity 映射、HMAC-SHA256 签名验证、300s 滑窗去重、webhook 端点集成测试全绿（test_m5_realtime.py 25 例）。2026-10-23 修复：`POST /alerts` 已挂载到 `open-tam serve`，去重后直接启动排查；`OPEN_TAM_METRICS_BACKEND`/`OPEN_TAM_LOGS_BACKEND` 已从 Settings 注入 CLI/Webhook/巡检。Aliyun 后端需安装 `uv sync --extra aliyun` 并配置凭证，真实云端验收仍需在凭证环境执行）
 
 ## M6 知识沉淀与 Skill 系统
 
@@ -79,11 +79,11 @@
 
 > 详细设计见 `docs/superpowers/specs/2026-09-08-m5-to-m10-roadmap-design.md` §M8
 
-- [ ] K8sGPT MCP 接入
-- [ ] `k8s-agent` 子 Agent（与 metric/log-agent 并列）
-- [ ] 新故障模式：pod_crash_loop / node_not_ready / dns_failure / cert_expiry
+- [x] K8sGPT 风格 MCP 接入（mock，FastMCP 协议兼容）
+- [x] `k8s-agent` 子 Agent（与 metric/log-agent 并列）
+- [x] 新故障模式：pod_crash_loop / node_not_ready / dns_failure / cert_expiry
 - [ ] （可选）ACS Agent Sandbox 隔离执行
-- **验收**：Pod CrashLoopBackOff 告警触发 k8s-agent 诊断，产出包含 Pod 事件与日志的根因报告
+- **验收**：Pod CrashLoopBackOff 告警触发 k8s-agent 诊断，产出包含 Pod 事件与日志的根因报告 ✅（2026-10-23：inline 与 MCP stdio 双通道可调用 4 个 K8s 工具；真实 K8s 集群 / K8sGPT 二进制尚未接入，见 README「当前限制」）
 
 ## M9 高级评测与质量闭环
 
@@ -94,7 +94,7 @@
 - [x] A/B 模型对比评测（`open-tam eval --compare`）
 - [x] CI 集成回归评测（`--min-hit-rate` 阈值）
 - [x] Web UI 评测标签页（趋势图 + 详情）
-- **验收**：CI 每次 PR 自动跑评测，命中率低于阈值告警 ✅（2026-09-22 冒烟，commit 7fe288e；`eval --fake --min-hit-rate 0.8` 跑通全部 8 种故障模式：定位率 100% / 关键词命中率 100% / 平均步数 3.0，退出码 0，报告落盘 reports/eval-*.md；EvidenceJudge LLM-as-Judge 证据充分性 0–1 锚定评分纳入评测；`eval-compare` A/B 多模型对比 Markdown 报告；定位率低于阈值退出码 1 可接 CI；test_m9_eval.py 全绿）。Web UI 评测标签页 ✅（2026-09-22，commit 0cc83a1；eval 结果落库 eval_runs（schema v2 迁移），GET /api/evals 趋势列表 + /{id} 含 runs 明细；前端 SVG 折线趋势图 + A/B 对比表 + 详情懒加载；test_web_evals.py 7 例全绿）
+- **验收**：CI 每次 PR 自动跑评测，命中率低于阈值告警 ✅（2026-09-22 冒烟，commit 7fe288e；2026-10-23 修复：eval 改为直接调用生产管线 `orchestrator/investigate.py`，EvidenceJudge 真正接入并产生非零证据分；CI workflow 已加入 `eval --fake --min-hit-rate 0.8`。真实模型评测仍需 `DASHSCOPE_API_KEY`，不在默认 CI 中运行；`eval-compare` 默认真实模型，`--fake` 仅验证链路）。Web UI 评测标签页 ✅（2026-09-22，commit 0cc83a1；eval 结果落库 eval_runs（schema v2 迁移），GET /api/evals 趋势列表 + /{id} 含 runs 明细；前端 SVG 折线趋势图 + A/B 对比表 + 详情懒加载；test_web_evals.py 7 例全绿）
 
 ## M10 告警风暴与高级编排
 
@@ -104,7 +104,44 @@
 - [x] 优先级排查队列（P0 抢占 P2）
 - [x] 修复 Playbook 编排（YAML 定义 + 护栏逐条执行）
 - [x] 跨集群/跨区域排查
-- **验收**：关联告警聚合与 Playbook 编排全绿（2026-09-22 核验，commit 86bd6ab；AlertCorrelator 时间窗口 + 服务重叠 + 依赖配置聚合告警风暴为 AlertGroup；PriorityQueue（heapq）P0–P3 分级、P0 抢占 P2；修复 Playbook YAML 编排经 Guardrails 逐条执行，on_failure=abort/continue/rollback + confidence_threshold 门槛；test_m10_storm.py 全绿）。跨集群/跨区域排查 ✅（2026-09-22，commit d81e505；FaultState.activate 支持 region 区域隔离（无 region 故障全局生效，兼容旧用法），query_metrics/query_logs 的 region 参数下沉 mock 数据层与 MCP server；MultiRegionBackend 线程池并行 fan-out 所有区域并聚合 {"regions": [...]}，单区域错误隔离、k8s 类无 region 工具透传主区域不包壳；OPEN_TAM_REGIONS 多区域配置接入 investigate 自动 fan-out，CLI `fault inject --region`；冒烟：cpu_spike @ cn-hangzhou 杭州峰值 92.95 异常 / 上海 33.04 正常；test_m10_regions.py 10 例全绿）
+- **验收**：关联告警聚合与 Playbook 编排全绿（2026-09-22 核验，commit 86bd6ab；2026-10-23 接线：新增 `open-tam storm analyze --alerts-file` 与 `open-tam playbook run <yaml>`，可直接从 CLI 使用关联聚合、优先级队列和 Guardrails 保护的修复 Playbook；test_m10_cli.py 覆盖）。跨集群/跨区域排查 ✅（2026-09-22，commit d81e505；FaultState.activate 支持 region 区域隔离（无 region 故障全局生效，兼容旧用法），query_metrics/query_logs 的 region 参数下沉 mock 数据层与 MCP server；MultiRegionBackend 线程池并行 fan-out 所有区域并聚合 {"regions": [...]}，单区域错误隔离、k8s 类无 region 工具透传主区域不包壳；OPEN_TAM_REGIONS 多区域配置接入 investigate 自动 fan-out，CLI `fault inject --region`；冒烟：cpu_spike @ cn-hangzhou 杭州峰值 92.95 异常 / 上海 33.04 正常；test_m10_regions.py 10 例全绿）
+
+## 能力发展 P0（2026-10-23）
+
+- [x] 内容目录 YAML 化：`content/modules.yaml` / `skills.yaml` / `cases.yaml`，Pydantic 校验与 `GET /api/catalog`
+- [x] DB v3：`teams`、`users.team_id`、`learning_progress`、`case_attempts`
+- [x] 学习进度 API：读取、保存、本地进度合并；未登录保留 localStorage
+- [x] 案例尝试：关联 investigation，完成后按关键词 rubric 自动评分并更新进度
+- [x] 个人能力摘要：模块/案例/Skill 覆盖/同步身份
+- [x] 团队看板：Mentor/Admin 查看成员进度、Skill 覆盖、待评审
+- [x] CLI：`team create/list`、`user create --team`
+- **验收**：328 passed / 1 skipped；认证态 UI 完成案例后进度落库，团队看板显示成员、Skill 覆盖与待评审
+
+## TAM 手册专题（2026-10-25）
+
+- [x] 接入完整书稿：28 章 + 22 个附录 + 19 个模板（`content/tam-book`）
+- [x] `GET /api/book` 目录 + `GET /api/book/{slug}` 正文（服务端 Markdown 渲染、原文 HTML 转义）
+- [x] Web UI “TAM 手册”专题页：按篇索引、搜索、章节 TOC、上下篇导航
+- [x] 工作台整体切换为紧凑 IBM 企业风格（白底蓝色、方形组件、自托管 IBM Plex）
+- **验收**：71 个专题页全部可打开；认证开启时书籍 API 需登录（匿名 401）；全量测试通过（新增 6 个书籍测试）
+
+## 实战流程中心（2026-10-25）
+
+- [x] 从书稿自动生成 69 个流程：28 章节实战 + 22 标准落地 + 19 模板工具
+- [x] 章节页展示关联流程；流程页可回原文、关联章节与排查工作台
+- [x] DB v4 `workflow_runs`：登录用户服务端保存步骤/备注/状态；demo 本地保存
+- [x] Web UI 流程中心：按阶段分组、搜索、类型筛选、我的流程、运行页、导出 Markdown
+- **验收**：章节 → 流程 → 勾选步骤 → 备注 → 保存 → 导出链路可用；69 个流程全部可打开；新增 4 个流程测试
+
+## 企业工作台 IA 重构（2026-10-25）
+
+- [x] 左侧 10 模块导航：今日工作台、任务中心、客户工作、服务执行、事件与问题、协同与经营、我的成长、团队管理、知识与工具、系统设置
+- [x] 折叠/收藏/角标/角色可见性：默认只展开当前模块；团队管理仅 Mentor/Admin；进行中事件置顶
+- [x] 顶部全局动作：客户切换器、全局搜索、快速新建、AI 助手、通知中心
+- [x] 核心页面：今日工作台、任务中心 + 统一详情、客户列表 + 客户 360° 十 Tab、事件与问题 + 作战室、成长总览/雷达/证据、团队分配/负载/质量、知识库/模板、系统设置/审计
+- [x] 既有能力映射：案例、手册、69 流程、排查工作台、历史、Skills、评测、团队看板全部进入新 IA，导航激活态正确
+- [x] 服务端补充：`/api/audit`（Admin）、`/api/history/{id}/report`（路径受限）、`/api/config` 角色权限与集成状态
+- **验收**：342 passed / 1 skipped；116 条新路由烟测 0 失败；390px 无横向溢出；认证态验证未登录/operator 团队菜单隐藏、mentor 团队数据、admin 审计可见；演示工作区与设置页可重置
 
 ## 行为评测（随 M2 起持续）
 

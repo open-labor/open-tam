@@ -2,40 +2,61 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 4
 
 
 class Database:
-    """SQLite database with WAL mode and simple migration."""
+    """SQLite database with WAL mode, one connection per thread."""
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
-        self._conn: sqlite3.Connection | None = None
+        self._local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
+        self._lock = threading.Lock()
 
     def connect(self) -> None:
-        # 排查在后台线程回写状态，连接需跨线程使用（WAL 模式下安全）
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._get_conn()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._local.conn = conn
+            with self._lock:
+                self._connections.append(conn)
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        return self._get_conn()
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local = threading.local()
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:
-        assert self._conn is not None, "Database not connected"
+        conn = self._conn
         try:
-            yield self._conn
-            self._conn.commit()
+            yield conn
+            conn.commit()
         except Exception:
-            self._conn.rollback()
+            conn.rollback()
             raise
 
     def migrate(self) -> None:
@@ -45,6 +66,10 @@ class Database:
             self._migrate_v1()
         if current < 2:
             self._migrate_v2()
+        if current < 3:
+            self._migrate_v3()
+        if current < 4:
+            self._migrate_v4()
         self._set_schema_version(CURRENT_SCHEMA_VERSION)
 
     def _get_schema_version(self) -> int:
@@ -150,6 +175,78 @@ class Database:
             );
 
             CREATE INDEX IF NOT EXISTS idx_eval_runs_created ON eval_runs(created_at);
+        """)
+        self._conn.commit()
+
+    def _migrate_v3(self) -> None:
+        assert self._conn is not None
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS teams (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            ALTER TABLE users ADD COLUMN team_id TEXT;
+
+            CREATE TABLE IF NOT EXISTS learning_progress (
+                user_id TEXT NOT NULL,
+                object_type TEXT NOT NULL,
+                object_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                score REAL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, object_type, object_id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_learning_user ON learning_progress(user_id);
+            CREATE INDEX IF NOT EXISTS idx_learning_object
+                ON learning_progress(object_type, object_id);
+
+            CREATE TABLE IF NOT EXISTS case_attempts (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                case_id TEXT NOT NULL,
+                investigation_id TEXT,
+                status TEXT NOT NULL DEFAULT 'started',
+                score REAL,
+                root_cause TEXT,
+                evidence_sufficiency REAL,
+                reviewer_id TEXT,
+                review_note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_attempts_user ON case_attempts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_attempts_case ON case_attempts(case_id);
+            CREATE INDEX IF NOT EXISTS idx_attempts_status ON case_attempts(status);
+        """)
+        self._conn.commit()
+
+    def _migrate_v4(self) -> None:
+        assert self._conn is not None
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'in_progress',
+                steps_json TEXT NOT NULL,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_user
+                ON workflow_runs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow
+                ON workflow_runs(workflow_id);
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_updated
+                ON workflow_runs(updated_at);
         """)
         self._conn.commit()
 

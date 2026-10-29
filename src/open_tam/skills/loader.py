@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from open_tam.paths import resolve_within, valid_skill_id
 from open_tam.skills.models import Skill
 
 
@@ -48,8 +49,10 @@ class SkillLoader:
         return self.load_all()
 
     def save(self, skill: Skill) -> Path:
+        if not valid_skill_id(skill.id):
+            raise ValueError(f"invalid skill id: {skill.id!r}")
         self.skills_dir.mkdir(parents=True, exist_ok=True)
-        path = self.skills_dir / f"{skill.id}.yaml"
+        path = resolve_within(self.skills_dir, f"{skill.id}.yaml")
         path.write_text(
             yaml.dump(skill.model_dump(), allow_unicode=True, default_flow_style=False, sort_keys=False),
             encoding="utf-8",
@@ -58,7 +61,9 @@ class SkillLoader:
         return path
 
     def delete(self, skill_id: str) -> bool:
-        path = self.skills_dir / f"{skill_id}.yaml"
+        if not valid_skill_id(skill_id):
+            return False
+        path = resolve_within(self.skills_dir, f"{skill_id}.yaml")
         if path.exists():
             path.unlink()
             self._skills = None

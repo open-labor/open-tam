@@ -77,3 +77,40 @@ async def test_index_served(app):
         r = await c.get("/")
     assert r.status_code == 200
     assert "open-tam" in r.text
+
+
+async def test_security_headers_and_health(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/faults")
+        assert r.headers["X-Content-Type-Options"] == "nosniff"
+        assert "default-src 'self'" in r.headers["Content-Security-Policy"]
+        assert r.headers["Cache-Control"] == "no-store"
+        r = await c.get("/health")
+        assert r.json() == {"status": "ok"}
+
+
+async def test_self_hosted_plex_font_is_served(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/static/fonts/IBMPlexSans-Regular.woff2")
+    assert r.status_code == 200
+    assert "woff2" in r.headers["content-type"]
+    assert len(r.content) > 1000
+
+
+async def test_faults_include_case_teaching_fields(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/faults")
+    case = next(x for x in r.json()["faults"] if x["name"] == "cpu_spike")
+    assert case["root_cause"]
+    assert case["remediation"]
+    assert case["log_signature"]
+    assert case["eval_keywords"]
+
+
+async def test_config_endpoint_is_public_and_safe(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/config")
+    body = r.json()
+    assert body["metrics_backend"] == "mock"
+    assert "auth_enabled" in body
+    assert "regions" in body
